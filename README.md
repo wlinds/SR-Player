@@ -1,7 +1,7 @@
 # <img src="src/assets/icons/icon.png" alt="alt text" width="32" height="32" /> SR Player - Sveriges Radio Desktop Player
 
-[![CI](https://github.com/wlinds/SR-Player/workflows/CI/badge.svg)](https://github.com/wlinds/SR-Player/actions)
-[![Release](https://img.shields.io/github/v/release/wlinds/SR-Player)](https://github.com/wlinds/SR-Player/releases)
+[![CI](https://github.com/wlinds/SR-Player/actions/workflows/ci.yml/badge.svg)](https://github.com/wlinds/SR-Player/actions)
+[![Release](https://img.shields.io/github/v/release/wlinds/SR-Player?include_prereleases)](https://github.com/wlinds/SR-Player/releases)
 [![License: MPL 2.0](https://img.shields.io/badge/License-MPL_2.0-brightgreen.svg)](https://opensource.org/licenses/MPL-2.0)
 
 A super fast and lightweight macOS (soon cross-platform) desktop app for streaming Sveriges Radio live channels, built with Rust, Slint, Symphonia and Rodio.
