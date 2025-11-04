@@ -5,6 +5,9 @@ on:
     tags:
       - 'v*'
 
+permissions:
+  contents: write
+
 env:
   CARGO_TERM_COLOR: always
 
@@ -12,17 +15,12 @@ jobs:
   create-release:
     name: Create Release
     runs-on: ubuntu-latest
-    outputs:
-      upload_url: ${{ steps.create_release.outputs.upload_url }}
     steps:
       - name: Create Release
         id: create_release
-        uses: actions/create-release@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        uses: softprops/action-gh-release@v1
         with:
-          tag_name: ${{ github.ref }}
-          release_name: SR Player ${{ github.ref_name }}
+          name: SR Player ${{ github.ref_name }}
           body: |
             ## SR Player ${{ github.ref_name }}
 
@@ -49,7 +47,6 @@ jobs:
 
   build-macos:
     name: Build macOS App
-    needs: create-release
     runs-on: macos-latest
 
     steps:
@@ -76,23 +73,18 @@ jobs:
     - name: Build macOS app bundle
       run: cargo bundle --release
 
-    - name: Create DMG or ZIP
+    - name: Create ZIP
       run: |
         cd target/release/bundle/osx
         zip -r "SR-Player-${{ github.ref_name }}-macos.zip" "SR Player.app"
         mv "SR-Player-${{ github.ref_name }}-macos.zip" ../../../..
 
-    - name: Upload Release Asset
-      uses: actions/upload-release-asset@v1
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        upload_url: ${{ needs.create-release.outputs.upload_url }}
-        asset_path: ./SR-Player-${{ github.ref_name }}-macos.zip
-        asset_name: SR-Player-${{ github.ref_name }}-macos.zip
-        asset_content_type: application/zip
-
     - name: Get app size
       run: |
         du -sh "target/release/bundle/osx/SR Player.app"
         ls -lh "SR-Player-${{ github.ref_name }}-macos.zip"
+
+    - name: Upload Release Asset
+      uses: softprops/action-gh-release@v1
+      with:
+        files: SR-Player-${{ github.ref_name }}-macos.zip
