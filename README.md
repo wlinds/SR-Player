@@ -29,7 +29,7 @@ The code is extensively commented and easy for new Rust developers to get into, 
 - Optimized release builds (~5MB total size)
 - Thread-safe async streaming architecture
 
-## **8. Milestone Plan**
+## Milestone Plan
 
 | Stage | Description |
 |--------|--------------|
