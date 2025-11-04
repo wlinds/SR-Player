@@ -1,5 +1,8 @@
 # <img src="src/assets/icons/icon.png" alt="alt text" width="32" height="32" /> SR Player - Sveriges Radio Desktop Player
 
+[![CI](https://github.com/wlinds/SR-Player/workflows/CI/badge.svg)](https://github.com/wlinds/SR-Player/actions)
+[![Release](https://img.shields.io/github/v/release/wlinds/SR-Player)](https://github.com/wlinds/SR-Player/releases)
+[![License: MPL 2.0](https://img.shields.io/badge/License-MPL_2.0-brightgreen.svg)](https://opensource.org/licenses/MPL-2.0)
 
 A super fast and lightweight macOS (soon cross-platform) desktop app for streaming Sveriges Radio live channels, built with Rust, Slint, Symphonia and Rodio.
 
@@ -36,9 +39,18 @@ The code is extensively commented and easy for new Rust developers to get into, 
 | M4 | Podcast browsing & playback, Linux & Windows build 
 | M5 | Polished UI & improved packaging
 
-## Quick Start
+## Installation
 
-### Development Mode
+### Download Pre-built Binary (Easy macOS Installation)
+
+1. Go to [Releases](https://github.com/wlinds/SR-Player/releases)
+2. Download `SR-Player-v0.1.0-macos.zip`
+3. Unzip and drag `SR Player.app` to Applications
+4. Right-click and select "Open" (first time only, due to macOS Gatekeeper)
+
+### Build from Source
+
+**Development Mode:**
 ```bash
 # Build and run
 cargo run
@@ -46,8 +58,7 @@ cargo run
 
 [Syntax highlighting in VSCode for Slint](https://marketplace.visualstudio.com/items?itemName=Slint.slint)
 
-### Production Build (macOS App)
-
+**Production Build (macOS App):**
 ```bash
 # Install cargo-bundle (first time only)
 cargo install cargo-bundle
