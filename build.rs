@@ -13,8 +13,7 @@ fn main() {
 
     // The expect() method is like try-catch in JavaScript:
     // If compilation fails, panic with this error message
-    slint_build::compile("src/ui/main.slint")
-        .expect("Failed to compile Slint UI");
+    slint_build::compile("src/ui/main.slint").expect("Failed to compile Slint UI");
 
     // After this runs successfully:
     // - Slint generates Rust bindings for MainWindow component

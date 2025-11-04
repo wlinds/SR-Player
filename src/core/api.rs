@@ -60,7 +60,10 @@ impl SrApiClient {
         // Build the full URL with AAC stream template and high quality
         // liveaudiotemplateid=5 gives us raw HTTP AAC streams (not playlists!)
         // audioquality=hi gives us 320kbps AAC (highest quality)
-        let url = format!("{}/channels?liveaudiotemplateid=5&audioquality=hi&format=json", SR_API_BASE);
+        let url = format!(
+            "{}/channels?liveaudiotemplateid=5&audioquality=hi&format=json",
+            SR_API_BASE
+        );
 
         debug!("Fetching channels from: {}", url);
 
@@ -101,7 +104,10 @@ impl SrApiClient {
     /// }
     /// ```
     pub fn get_schedule_right_now(&self) -> Result<ScheduleRightNowResponse> {
-        let url = format!("{}/scheduledepisodes/rightnow?format=json&pagination=false", SR_API_BASE);
+        let url = format!(
+            "{}/scheduledepisodes/rightnow?format=json&pagination=false",
+            SR_API_BASE
+        );
 
         debug!("Fetching current schedule from: {}", url);
 
@@ -154,7 +160,10 @@ mod tests {
         // Verify that each channel has required fields
         for channel in &channels {
             assert!(!channel.name.is_empty(), "Channel should have a name");
-            assert!(!channel.live_audio.url.is_empty(), "Channel should have a live audio URL");
+            assert!(
+                !channel.live_audio.url.is_empty(),
+                "Channel should have a live audio URL"
+            );
         }
     }
 
@@ -164,10 +173,19 @@ mod tests {
         let client = SrApiClient::new().unwrap();
         let schedule = client.get_schedule_right_now().unwrap();
 
-        assert!(!schedule.channels.is_empty(), "Should fetch schedule for at least one channel");
+        assert!(
+            !schedule.channels.is_empty(),
+            "Should fetch schedule for at least one channel"
+        );
 
         // Check that at least one channel has a current episode
-        let has_current = schedule.channels.iter().any(|ch| ch.current_episode.is_some());
-        assert!(has_current, "At least one channel should have a current episode");
+        let has_current = schedule
+            .channels
+            .iter()
+            .any(|ch| ch.current_episode.is_some());
+        assert!(
+            has_current,
+            "At least one channel should have a current episode"
+        );
     }
 }

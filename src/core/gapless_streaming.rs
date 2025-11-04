@@ -21,13 +21,11 @@
 
 use anyhow::{Context, Result};
 use bytes::Bytes;
-use log::{info, warn, error};
+use crossbeam_channel;
+use log::{error, info, warn};
 use rodio::{OutputStream, OutputStreamHandle, Sink, Source};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokio::sync::{mpsc, Mutex}; // tokio::sync::Mutex is Send + Sync friendly!
-use tokio::task::JoinHandle;
-use crossbeam_channel;
 use symphonia::core::audio::{AudioBufferRef, Signal};
 use symphonia::core::codecs::{Decoder, DecoderOptions};
 use symphonia::core::errors::Error as SymphoniaError;
@@ -35,6 +33,8 @@ use symphonia::core::formats::{FormatOptions, FormatReader};
 use symphonia::core::io::{MediaSource, MediaSourceStream};
 use symphonia::core::meta::MetadataOptions;
 use symphonia::core::probe::Hint;
+use tokio::sync::{mpsc, Mutex}; // tokio::sync::Mutex is Send + Sync friendly!
+use tokio::task::JoinHandle;
 
 // ============================================================================
 // STREAMING STATISTICS
@@ -160,7 +160,9 @@ impl std::io::Read for ChannelMediaSource {
         // Keep filling the buffer until it's full or we run out of data
         while total_read < buf.len() {
             // If we don't have a current chunk or we've exhausted it, get a new one
-            if self.current_chunk.is_none() || self.current_position >= self.current_chunk.as_ref().unwrap().len() {
+            if self.current_chunk.is_none()
+                || self.current_position >= self.current_chunk.as_ref().unwrap().len()
+            {
                 match self.receiver.recv() {
                     Ok(chunk) => {
                         // Got new chunk!
@@ -181,8 +183,9 @@ impl std::io::Read for ChannelMediaSource {
                 let remaining_in_buf = buf.len() - total_read;
                 let to_copy = remaining_in_chunk.min(remaining_in_buf);
 
-                buf[total_read..total_read + to_copy]
-                    .copy_from_slice(&chunk[self.current_position..self.current_position + to_copy]);
+                buf[total_read..total_read + to_copy].copy_from_slice(
+                    &chunk[self.current_position..self.current_position + to_copy],
+                );
 
                 self.current_position += to_copy;
                 total_read += to_copy;
@@ -202,7 +205,7 @@ impl std::io::Seek for ChannelMediaSource {
         // Live streams can't seek!
         Err(std::io::Error::new(
             std::io::ErrorKind::Unsupported,
-            "Cannot seek in live stream"
+            "Cannot seek in live stream",
         ))
     }
 }
@@ -389,8 +392,8 @@ impl Iterator for SymphoniaSource {
 
             // Need to decode next packet
             match self.decode_next_packet() {
-                Ok(true) => continue,  // Got new packet, try again
-                Ok(false) => return None,  // End of stream
+                Ok(true) => continue,     // Got new packet, try again
+                Ok(false) => return None, // End of stream
                 Err(e) => {
                     error!("Decode error: {}", e);
                     return None;
@@ -440,11 +443,10 @@ pub struct GaplessPlayer {
 impl GaplessPlayer {
     // Create a new gapless streaming player
     pub fn new() -> Result<Self> {
-        let (stream, stream_handle) = OutputStream::try_default()
-            .context("Failed to create audio output stream")?;
+        let (stream, stream_handle) =
+            OutputStream::try_default().context("Failed to create audio output stream")?;
 
-        let sink = Sink::try_new(&stream_handle)
-            .context("Failed to create audio sink")?;
+        let sink = Sink::try_new(&stream_handle).context("Failed to create audio sink")?;
 
         Ok(Self {
             _stream: stream,
@@ -520,7 +522,8 @@ impl GaplessPlayer {
                         if let Ok(mut stats_guard) = stats.try_lock() {
                             let elapsed = start_time.elapsed().as_secs_f32();
                             stats_guard.bytes_downloaded = bytes_downloaded;
-                            stats_guard.download_speed_kbps = (bytes_downloaded as f32 * 8.0) / (elapsed * 1000.0);
+                            stats_guard.download_speed_kbps =
+                                (bytes_downloaded as f32 * 8.0) / (elapsed * 1000.0);
                             stats_guard.bitrate_kbps = stats_guard.download_speed_kbps;
                             stats_guard.last_update = Instant::now();
                         }

@@ -13,13 +13,13 @@
 // MODULE DECLARATIONS
 // Like 'import' in Python or JavaScript
 // These tell Rust where to find our code modules
-mod core;  // This loads src/core/mod.rs
+mod core; // This loads src/core/mod.rs
 
 // Use statements bring items into scope
 // Like: from core.api import SrApiClient in Python
 // Or: import { SrApiClient } from './core/api' in JavaScript
 use core::api::SrApiClient;
-use core::gapless_send_safe::SendSafeGaplessPlayer;  // M3: Send-safe gapless streaming!
+use core::gapless_send_safe::SendSafeGaplessPlayer; // M3: Send-safe gapless streaming!
 
 // Import Slint types
 use slint::{ModelRc, VecModel};
@@ -27,8 +27,8 @@ use slint::{ModelRc, VecModel};
 // Standard library imports
 // Arc = Atomic Reference Counted (thread-safe reference counting)
 use std::collections::HashMap;
-use std::sync::Arc;
 use std::rc::Rc;
+use std::sync::Arc;
 
 // INCLUDE SLINT UI
 // This macro includes the compiled Slint code from build.rs
@@ -44,7 +44,10 @@ slint::include_modules!();
 fn parse_sr_date_to_time(date_str: &str) -> String {
     use chrono::{DateTime, Utc};
 
-    if let Some(ms_str) = date_str.strip_prefix("/Date(").and_then(|s| s.strip_suffix(")/")) {
+    if let Some(ms_str) = date_str
+        .strip_prefix("/Date(")
+        .and_then(|s| s.strip_suffix(")/"))
+    {
         if let Ok(ms) = ms_str.parse::<i64>() {
             return DateTime::from_timestamp_millis(ms)
                 .map(|dt: DateTime<Utc>| dt.format("%H:%M").to_string())
@@ -86,7 +89,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create a tokio runtime for async operations
     // We run it in a separate thread so Slint can have the main thread
     let runtime = tokio::runtime::Runtime::new()?;
-    let _runtime_guard = runtime.enter();  // Enter the runtime context
+    let _runtime_guard = runtime.enter(); // Enter the runtime context
 
     println!("Tokio runtime initialized");
 
@@ -138,7 +141,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Convert API response to UI model
     // We need to transform our Rust structs into Slint's ChannelItem struct
     let channel_items: Vec<ChannelItem> = channels
-        .iter()  // Iterate over channels (like for channel in channels)
+        .iter() // Iterate over channels (like for channel in channels)
         .filter_map(|channel| {
             // For each channel, create a ChannelItem
             // Use try_from for safe u32->i32 conversion (Slint limitation)
@@ -148,7 +151,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 stream_url: channel.live_audio.url.clone().into(),
             })
         })
-        .collect();  // Collect into a Vec<ChannelItem>
+        .collect(); // Collect into a Vec<ChannelItem>
 
     // Create a Slint model from the Vec
     // ModelRc is like a reactive array in Vue or state array in React
@@ -206,7 +209,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         Ok(schedule) => {
                             // Find the current channel's schedule
                             // Safe conversion: channel_id is guaranteed valid (came from UI)
-                            schedule.channels
+                            schedule
+                                .channels
                                 .iter()
                                 .find(|ch| ch.id == channel_id as u32)
                                 .and_then(|ch| ch.current_episode.clone())
@@ -216,22 +220,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             None
                         }
                     }
-                }).await.ok().flatten();
+                })
+                .await
+                .ok()
+                .flatten();
 
                 // Update UI with program information
                 if let Some(episode) = program_info {
-                    ui_clone.upgrade_in_event_loop(move |ui| {
-                        // Format times (convert from /Date(ms)/ format to HH:MM)
-                        let start_time = parse_sr_date_to_time(&episode.start_time_utc);
-                        let end_time = parse_sr_date_to_time(&episode.end_time_utc);
+                    ui_clone
+                        .upgrade_in_event_loop(move |ui| {
+                            // Format times (convert from /Date(ms)/ format to HH:MM)
+                            let start_time = parse_sr_date_to_time(&episode.start_time_utc);
+                            let end_time = parse_sr_date_to_time(&episode.end_time_utc);
 
-                        ui.set_current_program(ProgramInfo {
-                            title: episode.title.clone().into(),
-                            description: episode.description.unwrap_or_default().into(),
-                            start_time: start_time.into(),
-                            end_time: end_time.into(),
-                        });
-                    }).ok();
+                            ui.set_current_program(ProgramInfo {
+                                title: episode.title.clone().into(),
+                                description: episode.description.unwrap_or_default().into(),
+                                start_time: start_time.into(),
+                                end_time: end_time.into(),
+                            });
+                        })
+                        .ok();
                 }
 
                 match player_clone.start_stream(stream_url).await {

@@ -6,19 +6,26 @@
 // Architecture:
 // UI Thread -> Commands (mpsc) -> Audio Thread (owns OutputStream/Sink) -> Playback
 
+use crate::core::gapless_streaming::StreamStats;
 use anyhow::Result;
 use tokio::sync::{mpsc, oneshot};
-use crate::core::gapless_streaming::StreamStats;
 
 // Commands that can be sent to the audio thread
 #[derive(Debug)]
 pub enum AudioCommand {
-    StartStream { url: String, response: oneshot::Sender<Result<()>> },
-    Stop { response: oneshot::Sender<()> },
+    StartStream {
+        url: String,
+        response: oneshot::Sender<Result<()>>,
+    },
+    Stop {
+        response: oneshot::Sender<()>,
+    },
     Pause,
     Resume,
     SetVolume(f32),
-    GetStats { response: oneshot::Sender<StreamStats> },
+    GetStats {
+        response: oneshot::Sender<StreamStats>,
+    },
     Shutdown,
 }
 
@@ -90,14 +97,19 @@ impl SendSafeGaplessPlayer {
     // Start streaming from a URL
     pub async fn start_stream(&self, url: String) -> Result<()> {
         let (response_tx, response_rx) = oneshot::channel();
-        self.command_tx.send(AudioCommand::StartStream { url, response: response_tx })?;
+        self.command_tx.send(AudioCommand::StartStream {
+            url,
+            response: response_tx,
+        })?;
         response_rx.await?
     }
 
     // Stop streaming
     pub async fn stop(&self) {
         let (response_tx, response_rx) = oneshot::channel();
-        let _ = self.command_tx.send(AudioCommand::Stop { response: response_tx });
+        let _ = self.command_tx.send(AudioCommand::Stop {
+            response: response_tx,
+        });
         let _ = response_rx.await;
     }
 
