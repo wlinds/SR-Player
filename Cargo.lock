@@ -4333,17 +4333,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ringbuf"
-version = "0.4.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fe47b720588c8702e34b5979cb3271a8b1842c7cb6f57408efa70c779363488c"
-dependencies = [
- "crossbeam-utils",
- "portable-atomic",
- "portable-atomic-util",
-]
-
-[[package]]
 name = "rodio"
 version = "0.19.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4909,10 +4898,8 @@ dependencies = [
  "chrono",
  "crossbeam-channel",
  "env_logger",
- "futures",
  "log",
  "reqwest",
- "ringbuf",
  "rodio",
  "serde",
  "serde_json",
@@ -4920,7 +4907,6 @@ dependencies = [
  "slint-build",
  "symphonia",
  "tokio",
- "tokio-stream",
 ]
 
 [[package]]
@@ -5432,17 +5418,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1729aa945f29d91ba541258c8df89027d5792d85a8841fb65e8bf0f4ede4ef61"
 dependencies = [
  "rustls",
- "tokio",
-]
-
-[[package]]
-name = "tokio-stream"
-version = "0.1.17"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "eca58d7bba4a75707817a2c44174253f9236b2d5fbd055602e9d5c07c139a047"
-dependencies = [
- "futures-core",
- "pin-project-lite",
  "tokio",
 ]
 

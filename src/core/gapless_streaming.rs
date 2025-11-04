@@ -42,6 +42,7 @@ use tokio::task::JoinHandle;
 
 // Real-time statistics about the audio stream
 #[derive(Debug, Clone)]
+#[allow(dead_code)] // Some fields reserved for future stats display
 pub struct StreamStats {
     pub bitrate_kbps: f32,
     pub buffer_bytes: usize,
@@ -598,6 +599,7 @@ impl GaplessPlayer {
     }
 
     // Check if audio is playing
+    #[allow(dead_code)] // Reserved for future UI status indicator
     pub async fn is_playing(&self) -> bool {
         let sink = self.sink.lock().await;
         !sink.is_paused() && !sink.empty()

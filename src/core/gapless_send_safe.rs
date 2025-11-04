@@ -12,6 +12,7 @@ use tokio::sync::{mpsc, oneshot};
 
 // Commands that can be sent to the audio thread
 #[derive(Debug)]
+#[allow(dead_code)] // Some variants reserved for future UI controls
 pub enum AudioCommand {
     StartStream {
         url: String,
@@ -114,21 +115,25 @@ impl SendSafeGaplessPlayer {
     }
 
     // Pause playback
+    #[allow(dead_code)] // Reserved for future UI pause button
     pub fn pause(&self) {
         let _ = self.command_tx.send(AudioCommand::Pause);
     }
 
     // Resume playback
+    #[allow(dead_code)] // Reserved for future UI resume button
     pub fn resume(&self) {
         let _ = self.command_tx.send(AudioCommand::Resume);
     }
 
     // Set volume (0.0 to 1.0)
+    #[allow(dead_code)] // Reserved for future UI volume slider
     pub fn set_volume(&self, volume: f32) {
         let _ = self.command_tx.send(AudioCommand::SetVolume(volume));
     }
 
     // Get current streaming statistics (sync version for UI timer)
+    #[allow(dead_code)] // Reserved for future UI stats display
     pub fn get_stats_sync(&self) -> StreamStats {
         // For now, return default stats since async get would block the UI
         // TODO: Implement stats caching on the send-safe wrapper side
