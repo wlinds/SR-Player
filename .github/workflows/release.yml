@@ -12,41 +12,8 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  create-release:
-    name: Create Release
-    runs-on: ubuntu-latest
-    steps:
-      - name: Create Release
-        id: create_release
-        uses: softprops/action-gh-release@v1
-        with:
-          name: SR Player ${{ github.ref_name }}
-          body: |
-            ## SR Player ${{ github.ref_name }}
-
-            A fast and lightweight macOS desktop app for streaming Sveriges Radio live channels.
-
-            ### Features
-            - Stream all Sveriges Radio live channels
-            - Gapless audio playback with Symphonia decoder
-            - Real-time "Now Playing" information
-            - Native macOS .app bundle (~5MB)
-
-            ### Installation
-            1. Download `SR-Player-${{ github.ref_name }}-macos.zip`
-            2. Unzip the file
-            3. Drag `SR Player.app` to your Applications folder
-            4. Right-click and select "Open" (first time only, due to macOS Gatekeeper)
-
-            ### What's Changed
-            - Initial release with gapless streaming
-            - Full Sveriges Radio API integration
-            - Optimized binary size (~5MB)
-          draft: false
-          prerelease: false
-
-  build-macos:
-    name: Build macOS App
+  build-and-release:
+    name: Build and Release macOS App
     runs-on: macos-latest
 
     steps:
@@ -84,7 +51,31 @@ jobs:
         du -sh "target/release/bundle/osx/SR Player.app"
         ls -lh "SR-Player-${{ github.ref_name }}-macos.zip"
 
-    - name: Upload Release Asset
-      uses: softprops/action-gh-release@v1
+    - name: Create Release and Upload Asset
+      uses: softprops/action-gh-release@v2
       with:
+        name: SR Player ${{ github.ref_name }}
+        body: |
+          ## SR Player ${{ github.ref_name }}
+
+          A fast and lightweight macOS desktop app for streaming Sveriges Radio live channels.
+
+          ### Features
+          - Stream all Sveriges Radio live channels
+          - Gapless audio playback with Symphonia decoder
+          - Real-time "Now Playing" information
+          - Native macOS .app bundle (~5MB)
+
+          ### Installation
+          1. Download `SR-Player-${{ github.ref_name }}-macos.zip`
+          2. Unzip the file
+          3. Drag `SR Player.app` to your Applications folder
+          4. Right-click and select "Open" (first time only, due to macOS Gatekeeper)
+
+          ### What's Changed
+          - Initial release with gapless streaming
+          - Full Sveriges Radio API integration
+          - Optimized binary size (~5MB)
         files: SR-Player-${{ github.ref_name }}-macos.zip
+        draft: false
+        prerelease: false
