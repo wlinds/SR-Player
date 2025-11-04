@@ -1,0 +1,43 @@
+[package]
+name = "sr-player"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+slint = "1.9"
+# Rodio for audio output (sink/device management)
+# Keep symphonia-aac for M2 StreamingPlayer, add direct symphonia for M3
+rodio = { version = "0.19", features = ["symphonia-aac"] }
+# Symphonia for direct AAC decoding (custom Source implementation for M3)
+# We use symphonia directly for gapless streaming
+symphonia = { version = "0.5", features = ["aac", "mp3"] }
+reqwest = { version = "0.12", features = ["blocking", "json", "stream"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tokio = { version = "1", features = ["full"] }
+bytes = "1.5"
+anyhow = "1.0"
+env_logger = "0.11"
+log = "0.4"
+crossbeam-channel = "0.5"
+chrono = "0.4"
+
+[build-dependencies]
+slint-build = "1.9"
+
+[profile.release]
+strip = true          # Strip symbols from binary for smaller size
+opt-level = "z"       # Optimize for size rather than speed
+lto = true            # Enable link-time optimization
+codegen-units = 1     # Better optimization (slower compile, smaller binary)
+panic = "abort"       # Remove panic unwinding machinery
+
+[package.metadata.bundle]
+name = "SR Player"
+identifier = "com.srplayer.app"
+icon = ["src/assets/icons/icon.icns"]
+category = "public.app-category.music"
+short_description = "Sveriges Radio Player"
+long_description = "A native macOS application for streaming Sveriges Radio channels with gapless playback"
+version = "0.1.0"
+copyright = "Copyright (c) 2025"
