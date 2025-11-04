@@ -1,0 +1,254 @@
+// Slint UI definition for SR Player
+//
+// SLINT is a declarative UI framework (like HTML/CSS or SwiftUI)
+//
+// Compare to:
+// - HTML: Describes WHAT the UI looks like (not HOW to build it)
+// - React JSX: Component-based, but Slint is compiled to native code
+// - Qt QML: Very similar! Slint was inspired by QML
+//
+// Key concepts:
+// - Components are like React components or HTML elements
+// - Properties are like React props or HTML attributes
+// - Callbacks are like JavaScript event handlers (onClick, etc.)
+
+// Import standard widgets from Slint's widget library
+// Like: import { Button } from 'react' or from tkinter import Button
+import { Button, VerticalBox, HorizontalBox, ListView, ScrollView } from "std-widgets.slint";
+
+// Define a struct to represent a channel in the UI
+// This is like a TypeScript interface or Python dataclass:
+//
+// Python equivalent:
+//   @dataclass
+//   class ChannelItem:
+//       id: int
+//       name: str
+//       stream_url: str
+//
+// TypeScript equivalent:
+//   interface ChannelItem {
+//       id: number;
+//       name: string;
+//       stream_url: string;
+//   }
+export struct ChannelItem {
+    id: int,           // Channel ID (like 132 for SR P1)
+    name: string,      // Channel name (like "SR P1")
+    stream-url: string, // URL to the MP3 stream
+}
+
+// Struct to represent currently playing program information
+export struct ProgramInfo {
+    title: string,           // Current program title
+    description: string,     // Program description
+    start-time: string,      // Start time (formatted)
+    end-time: string,        // End time (formatted)
+}
+
+// Main application window component
+// Like <App> component in React or main() window in Tkinter
+export component MainWindow inherits Window {
+    // PROPERTIES (like React state or instance variables)
+    // These can be accessed and modified from Rust code
+
+    // in-out means the property can be read and written from outside
+    in-out property <string> current-channel-name: "No channel selected";
+    in-out property <bool> is-playing: false;
+    in-out property <bool> is-loading: false;
+    in-out property <ProgramInfo> current-program: {
+        title: "",
+        description: "",
+        start-time: "",
+        end-time: ""
+    };
+
+    // Array of channels (like a JavaScript array or Python list)
+    // This will be populated from Rust with data from the SR API
+    in-out property <[ChannelItem]> channels: [];
+
+    // CALLBACKS (like JavaScript event handlers or Python callback functions)
+    // These are called when user interacts with the UI
+    // The actual implementation is in Rust
+
+    // Called when user clicks on a channel
+    // Like: onClick={(id, url) => { ... }} in React
+    callback channel-selected(int, string);  // Parameters: (channel_id, stream_url)
+
+    // Called when user clicks stop
+    callback stop-clicked();
+
+    // Window properties
+    title: "SR Player - Sveriges Radio";
+    preferred-width: 800px;
+    preferred-height: 600px;
+    background: #1a1a1a;
+
+    // Main layout - vertical arrangement of elements
+    // Like <div style="display: flex; flex-direction: column"> in CSS
+    VerticalBox {
+        padding: 16px;
+        spacing: 12px;
+
+        // ================================================================
+        // HEADER SECTION
+        // ================================================================
+        HorizontalBox {
+            alignment: center;
+
+            Text {
+                text: "SR Player";
+                font-size: 24px;
+                font-weight: 700;
+                color: #ffffff;
+            }
+        }
+
+        // ================================================================
+        // NOW PLAYING SECTION
+        // ================================================================
+        Rectangle {
+            background: #2a2a2a;
+            border-radius: 8px;
+            min-height: 180px;
+
+            VerticalBox {
+                padding: 16px;
+                spacing: 8px;
+
+                Text {
+                    text: "Now Playing";
+                    font-size: 14px;
+                    color: #888888;
+                }
+
+                Text {
+                    // Shows current channel name, or "No channel selected"
+                    text: current-channel-name;
+                    font-size: 18px;
+                    font-weight: 600;
+                    color: #ffffff;
+                }
+
+                // Status indicator
+                Text {
+                    // Conditional text - like JavaScript ternary operator:
+                    // is_playing ? "Playing..." : "Stopped"
+                    text: is-loading ? "Loading..." :
+                          is-playing ? "▶ Playing..." : "⏸ Stopped";
+                    font-size: 14px;
+                    color: is-playing ? #4CAF50 : #888888;  // Green if playing, gray if not
+                }
+
+                // Show program information if available
+                if current-program.title != "": VerticalBox {
+                    spacing: 6px;
+                    padding-top: 8px;
+
+                    // Program title
+                    Text {
+                        text: current-program.title;
+                        font-size: 16px;
+                        font-weight: 600;
+                        color: #e0e0e0;
+                    }
+
+                    // Time range
+                    if current-program.start-time != "": Text {
+                        text: current-program.start-time + " - " + current-program.end-time;
+                        font-size: 13px;
+                        color: #aaaaaa;
+                    }
+
+                    // Program description
+                    if current-program.description != "": Text {
+                        text: current-program.description;
+                        font-size: 12px;
+                        color: #999999;
+                        wrap: word-wrap;
+                        overflow: elide;
+                        max-height: 40px;
+                    }
+                }
+            }
+        }
+
+        // ================================================================
+        // PLAYBACK CONTROLS
+        // ================================================================
+        HorizontalBox {
+            spacing: 8px;
+            alignment: center;
+
+            // Stop button
+            Button {
+                text: "Stop";
+                enabled: is-playing && !is-loading;
+
+                clicked => {
+                    stop-clicked();
+                }
+            }
+        }
+
+        // ================================================================
+        // CHANNEL LIST
+        // ================================================================
+        Text {
+            text: "Available Channels";
+            font-size: 16px;
+            font-weight: 600;
+            color: #ffffff;
+        }
+
+        // Scrollable list of channels
+        // Like <div style="overflow-y: scroll"> in HTML
+        ScrollView {
+            // Use remaining vertical space
+            vertical-stretch: 1;
+
+            // ListView is like map() in React:
+            // channels.map(channel => <ChannelListItem channel={channel} />)
+            VerticalLayout {
+                spacing: 4px;
+
+                // For each channel in the channels array, create a button
+                for channel in channels: Rectangle {
+                    height: 50px;
+                    background: channel-touch.has-hover ? #3a3a3a : #2a2a2a;
+                    border-radius: 4px;
+
+                    // TouchArea makes the rectangle clickable
+                    // Like adding onClick to a div in React
+                    channel-touch := TouchArea {
+                        clicked => {
+                            // When clicked, call the callback with channel data
+                            channel-selected(channel.id, channel.stream-url);
+                        }
+                    }
+
+                    HorizontalBox {
+                        padding: 12px;
+                        spacing: 8px;
+
+                        Text {
+                            text: channel.name;
+                            font-size: 16px;
+                            color: #ffffff;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
+
+                // Show message if no channels loaded
+                if channels.length == 0: Text {
+                    text: "Loading channels...";
+                    color: #888888;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+            }
+        }
+
+    }
+}
