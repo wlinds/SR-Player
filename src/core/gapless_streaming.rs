@@ -550,26 +550,41 @@ impl GaplessPlayer {
         // Spawn decoder task
         let sink_clone = sink.clone();
         tokio::task::spawn_blocking(move || {
-            info!("Decoder task started");
+            info!("Decoder task started, waiting for initial data...");
 
-            // Create our custom media source from the channel
-            let media_source = Box::new(ChannelMediaSource::new(data_rx));
+            // Wait for first chunk to arrive before creating Symphonia source
+            // This ensures we have data to probe when Symphonia initializes
+            match data_rx.recv_timeout(Duration::from_secs(1)) {
+                Ok(first_chunk) => {
+                    info!("Received first chunk ({} bytes), creating decoder...", first_chunk.len());
 
-            // Create Symphonia source
-            let symphonia_source = match SymphoniaSource::new(media_source) {
-                Ok(source) => source,
+                    // Create our custom media source with the first chunk already received
+                    let mut media_source = Box::new(ChannelMediaSource::new(data_rx));
+                    // Store the first chunk in the media source
+                    media_source.current_chunk = Some(first_chunk);
+                    media_source.current_position = 0;
+
+                    // Create Symphonia source - now it has data to probe
+                    let symphonia_source = match SymphoniaSource::new(media_source) {
+                        Ok(source) => source,
+                        Err(e) => {
+                            error!("Failed to create Symphonia source: {}", e);
+                            return;
+                        }
+                    };
+
+                    // Append to sink and play!
+                    let sink_guard = tokio::runtime::Handle::current().block_on(sink_clone.lock());
+                    sink_guard.append(symphonia_source);
+                    sink_guard.play();
+
+                    info!("Playback started!");
+                }
                 Err(e) => {
-                    error!("Failed to create Symphonia source: {}", e);
+                    error!("Timeout waiting for initial data: {}", e);
                     return;
                 }
-            };
-
-            // Append to sink and play!
-            let sink_guard = tokio::runtime::Handle::current().block_on(sink_clone.lock());
-            sink_guard.append(symphonia_source);
-            sink_guard.play();
-
-            info!("Playback started!");
+            }
         });
 
         Ok(())
