@@ -4898,6 +4898,7 @@ dependencies = [
  "chrono",
  "crossbeam-channel",
  "env_logger",
+ "image",
  "log",
  "reqwest",
  "rodio",

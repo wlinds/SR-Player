@@ -44,6 +44,7 @@ export struct ProgramInfo {
     description: string,     // Program description
     start-time: string,      // Start time (formatted)
     end-time: string,        // End time (formatted)
+    show-image: image,       // Show image (loaded from URL)
 }
 
 // Main application window component
@@ -60,7 +61,8 @@ export component MainWindow inherits Window {
         title: "",
         description: "",
         start-time: "",
-        end-time: ""
+        end-time: "",
+        show-image: @image-url("")
     };
 
     // Array of channels (like a JavaScript array or Python list)
@@ -93,16 +95,16 @@ export component MainWindow inherits Window {
         // ================================================================
         // HEADER SECTION
         // ================================================================
-        HorizontalBox {
-            alignment: center;
+        // HorizontalBox {
+        //     alignment: center;
 
-            Text {
-                text: "SR Player";
-                font-size: 24px;
-                font-weight: 700;
-                color: #ffffff;
-            }
-        }
+        //     Text {
+        //         text: "SR Player";
+        //         font-size: 24px;
+        //         font-weight: 700;
+        //         color: #ffffff;
+        //     }
+        // }
 
         // ================================================================
         // NOW PLAYING SECTION
@@ -141,33 +143,45 @@ export component MainWindow inherits Window {
                 }
 
                 // Show program information if available
-                if current-program.title != "": VerticalBox {
-                    spacing: 6px;
+                if current-program.title != "": HorizontalBox {
+                    spacing: 12px;
                     padding-top: 8px;
 
-                    // Program title
-                    Text {
-                        text: current-program.title;
-                        font-size: 16px;
-                        font-weight: 600;
-                        color: #e0e0e0;
+                    // Show image to the left of program info
+                    Image {
+                        source: current-program.show-image;
+                        width: 80px;
+                        height: 80px;
+                        image-fit: cover;
                     }
 
-                    // Time range
-                    if current-program.start-time != "": Text {
-                        text: current-program.start-time + " - " + current-program.end-time;
-                        font-size: 13px;
-                        color: #aaaaaa;
-                    }
+                    VerticalBox {
+                        spacing: 6px;
 
-                    // Program description
-                    if current-program.description != "": Text {
-                        text: current-program.description;
-                        font-size: 12px;
-                        color: #999999;
-                        wrap: word-wrap;
-                        overflow: elide;
-                        max-height: 40px;
+                        // Program title
+                        Text {
+                            text: current-program.title;
+                            font-size: 16px;
+                            font-weight: 600;
+                            color: #e0e0e0;
+                        }
+
+                        // Time range
+                        if current-program.start-time != "": Text {
+                            text: current-program.start-time + " - " + current-program.end-time;
+                            font-size: 13px;
+                            color: #aaaaaa;
+                        }
+
+                        // Program description
+                        if current-program.description != "": Text {
+                            text: current-program.description;
+                            font-size: 12px;
+                            color: #999999;
+                            wrap: word-wrap;
+                            overflow: elide;
+                            max-height: 40px;
+                        }
                     }
                 }
             }

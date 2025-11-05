@@ -64,6 +64,44 @@ fn empty_program_info() -> ProgramInfo {
         description: "".into(),
         start_time: "".into(),
         end_time: "".into(),
+        show_image: slint::Image::default(),
+    }
+}
+
+/// Download image bytes from URL
+fn download_image_bytes(url: &str) -> Option<Vec<u8>> {
+    if url.is_empty() {
+        return None;
+    }
+
+    match reqwest::blocking::get(url) {
+        Ok(response) => {
+            response.bytes().ok().map(|b| b.to_vec())
+        }
+        Err(e) => {
+            eprintln!("Failed to download image from {}: {}", url, e);
+            None
+        }
+    }
+}
+
+/// Convert image bytes to Slint Image using the image crate
+fn bytes_to_slint_image(bytes: Vec<u8>) -> Option<slint::Image> {
+    match image::load_from_memory(&bytes) {
+        Ok(img) => {
+            let rgba = img.to_rgba8();
+            let (width, height) = (rgba.width(), rgba.height());
+            let buffer = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
+                rgba.as_raw(),
+                width,
+                height,
+            );
+            Some(slint::Image::from_rgba8(buffer))
+        }
+        Err(e) => {
+            eprintln!("Failed to decode image: {}", e);
+            None
+        }
     }
 }
 
@@ -227,17 +265,32 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 // Update UI with program information
                 if let Some(episode) = program_info {
+                    // Download image bytes in blocking task
+                    let image_url = episode.social_image.clone().unwrap_or_default();
+                    let image_bytes = tokio::task::spawn_blocking(move || {
+                        download_image_bytes(&image_url)
+                    })
+                    .await
+                    .ok()
+                    .flatten();
+
                     ui_clone
                         .upgrade_in_event_loop(move |ui| {
                             // Format times (convert from /Date(ms)/ format to HH:MM)
                             let start_time = parse_sr_date_to_time(&episode.start_time_utc);
                             let end_time = parse_sr_date_to_time(&episode.end_time_utc);
 
+                            // Convert image bytes to Slint Image on the main thread
+                            let show_image = image_bytes
+                                .and_then(bytes_to_slint_image)
+                                .unwrap_or_default();
+
                             ui.set_current_program(ProgramInfo {
                                 title: episode.title.clone().into(),
                                 description: episode.description.unwrap_or_default().into(),
                                 start_time: start_time.into(),
                                 end_time: end_time.into(),
+                                show_image,
                             });
                         })
                         .ok();
