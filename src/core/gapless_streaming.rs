@@ -502,12 +502,41 @@ impl GaplessPlayer {
                 }
             };
 
-            info!("Connected to stream, starting download...");
+            info!("Connected to stream, buffering initial data...");
 
             let mut bytes_downloaded = 0;
             let start_time = Instant::now();
+            let mut initial_buffer = Vec::new();
+            const INITIAL_BUFFER_SIZE: usize = 32_768; // 32KB initial buffer
 
-            // Stream bytes continuously
+            // Buffer initial chunks before starting decoder
+            // This prevents "EOF at 0 bytes" errors and ensures smooth startup
+            while initial_buffer.len() < INITIAL_BUFFER_SIZE {
+                match response.chunk().await {
+                    Ok(Some(chunk)) => {
+                        bytes_downloaded += chunk.len();
+                        initial_buffer.extend_from_slice(&chunk);
+                    }
+                    Ok(None) => {
+                        error!("Stream ended while buffering initial data");
+                        return;
+                    }
+                    Err(e) => {
+                        error!("Error reading initial chunk: {}", e);
+                        return;
+                    }
+                }
+            }
+
+            info!("Initial buffer complete ({} bytes), starting playback...", initial_buffer.len());
+
+            // Send the buffered data immediately
+            if data_tx.send(Bytes::from(initial_buffer)).is_err() {
+                error!("Failed to send initial buffer");
+                return;
+            }
+
+            // Stream remaining bytes continuously
             while let Some(chunk_result) = response.chunk().await.transpose() {
                 // Check for stop command (non-blocking)
                 if let Ok(StreamCommand::Stop) = command_rx.try_recv() {
