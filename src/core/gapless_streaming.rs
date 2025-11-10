@@ -502,12 +502,44 @@ impl GaplessPlayer {
                 }
             };
 
-            info!("Connected to stream, starting download...");
+            info!("Connected to stream, buffering initial data...");
 
             let mut bytes_downloaded = 0;
             let start_time = Instant::now();
+            let mut initial_buffer = Vec::new();
+            const INITIAL_BUFFER_SIZE: usize = 8_192; // 8KB initial buffer
 
-            // Stream bytes continuously
+            // Buffer initial chunks before starting decoder
+            // This prevents "EOF at 0 bytes" errors and ensures smooth startup
+            while initial_buffer.len() < INITIAL_BUFFER_SIZE {
+                match response.chunk().await {
+                    Ok(Some(chunk)) => {
+                        bytes_downloaded += chunk.len();
+                        initial_buffer.extend_from_slice(&chunk);
+                    }
+                    Ok(None) => {
+                        error!("Stream ended while buffering initial data");
+                        return;
+                    }
+                    Err(e) => {
+                        error!("Error reading initial chunk: {}", e);
+                        return;
+                    }
+                }
+            }
+
+            info!(
+                "Initial buffer complete ({} bytes), starting playback...",
+                initial_buffer.len()
+            );
+
+            // Send the buffered data immediately
+            if data_tx.send(Bytes::from(initial_buffer)).is_err() {
+                error!("Failed to send initial buffer");
+                return;
+            }
+
+            // Stream remaining bytes continuously
             while let Some(chunk_result) = response.chunk().await.transpose() {
                 // Check for stop command (non-blocking)
                 if let Ok(StreamCommand::Stop) = command_rx.try_recv() {
@@ -550,26 +582,43 @@ impl GaplessPlayer {
         // Spawn decoder task
         let sink_clone = sink.clone();
         tokio::task::spawn_blocking(move || {
-            info!("Decoder task started");
+            info!("Decoder task started, waiting for initial data...");
 
-            // Create our custom media source from the channel
-            let media_source = Box::new(ChannelMediaSource::new(data_rx));
+            // Wait for first chunk to arrive before creating Symphonia source
+            // This ensures we have data to probe when Symphonia initializes
+            match data_rx.recv_timeout(Duration::from_secs(1)) {
+                Ok(first_chunk) => {
+                    info!(
+                        "Received first chunk ({} bytes), creating decoder...",
+                        first_chunk.len()
+                    );
 
-            // Create Symphonia source
-            let symphonia_source = match SymphoniaSource::new(media_source) {
-                Ok(source) => source,
-                Err(e) => {
-                    error!("Failed to create Symphonia source: {}", e);
-                    return;
+                    // Create our custom media source with the first chunk already received
+                    let mut media_source = Box::new(ChannelMediaSource::new(data_rx));
+                    // Store the first chunk in the media source
+                    media_source.current_chunk = Some(first_chunk);
+                    media_source.current_position = 0;
+
+                    // Create Symphonia source - now it has data to probe
+                    let symphonia_source = match SymphoniaSource::new(media_source) {
+                        Ok(source) => source,
+                        Err(e) => {
+                            error!("Failed to create Symphonia source: {}", e);
+                            return;
+                        }
+                    };
+
+                    // Append to sink and play!
+                    let sink_guard = tokio::runtime::Handle::current().block_on(sink_clone.lock());
+                    sink_guard.append(symphonia_source);
+                    sink_guard.play();
+
+                    info!("Playback started!");
                 }
-            };
-
-            // Append to sink and play!
-            let sink_guard = tokio::runtime::Handle::current().block_on(sink_clone.lock());
-            sink_guard.append(symphonia_source);
-            sink_guard.play();
-
-            info!("Playback started!");
+                Err(e) => {
+                    error!("Timeout waiting for initial data: {}", e);
+                }
+            }
         });
 
         Ok(())

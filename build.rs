@@ -20,6 +20,10 @@ fn main() {
     // - We can use it in main.rs like: slint::include_modules!();
 
     println!("cargo:rerun-if-changed=src/ui/main.slint");
+    println!("cargo:rerun-if-changed=src/ui/types.slint");
+    println!("cargo:rerun-if-changed=src/ui/now_playing.slint");
+    println!("cargo:rerun-if-changed=src/ui/tab_content.slint");
+    println!("cargo:rerun-if-changed=src/ui/tab_bar.slint");
     // This tells Cargo: "If main.slint changes, run build.rs again"
     // Like file watching in webpack or nodemon
 }

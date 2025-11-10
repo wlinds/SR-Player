@@ -23,4 +23,6 @@
 pub mod api; // Exposes core/api.rs - API client for Sveriges Radio
 pub mod gapless_send_safe;
 pub mod gapless_streaming; // Exposes core/gapless_streaming.rs - Gapless player with Symphonia
-pub mod models; // Exposes core/models.rs - Data structures for API responses // Exposes core/gapless_send_safe.rs - Send-safe wrapper
+pub mod models; // Exposes core/models.rs - Data structures for API responses
+pub mod podcast; // Exposes core/podcast.rs - Podcast handling utilities
+pub mod utils; // Exposes core/utils.rs - Utility functions for image and date handling

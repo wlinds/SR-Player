@@ -1,0 +1,64 @@
+// Shared type definitions for SR Player
+//
+// This file contains all the data structures (structs) used across components.
+// By keeping them in a separate file, we avoid circular dependencies.
+//
+// These structs are like TypeScript interfaces or Python dataclasses,
+// defining the shape of data passed between components.
+
+// ================================================================
+// CHANNEL DATA
+// ================================================================
+
+// Represents a radio channel in the Live tab
+export struct ChannelItem {
+    id: int,               // Channel ID (e.g., 132 for SR P1)
+    name: string,          // Channel display name (e.g., "SR P1")
+    stream-url: string,    // URL to the MP3 stream
+}
+
+// ================================================================
+// PROGRAM DATA
+// ================================================================
+
+// Information about the currently playing program
+export struct ProgramInfo {
+    title: string,         // Current program title
+    description: string,   // Program description
+    start-time: string,    // Start time (formatted as "HH:MM")
+    end-time: string,      // End time (formatted as "HH:MM")
+    show-image: image,     // Program thumbnail/image
+    program-id: int,       // Unique program ID for API calls
+    has-podcasts: bool,    // Whether this program has podcast episodes
+}
+
+// Represents a program with podcast episodes
+export struct ProgramItem {
+    id: int,                   // Program ID
+    name: string,              // Program name
+    description: string,       // Program description
+    image: image,              // Program logo/image
+    has-pod: bool,             // Has podcast episodes
+
+    // Group-related properties (for collapsible sections like P4 Local News)
+    is-group: bool,            // True if this is a group header
+    is-expanded: bool,         // True if item should be visible
+    is-child: bool,            // True if this is a child of a group
+    group-id: int,             // ID of parent group (0 if not a child)
+    group-expanded: bool,      // True if parent group is expanded
+}
+
+// ================================================================
+// EPISODE DATA
+// ================================================================
+
+// Represents a single podcast episode
+export struct EpisodeItem {
+    id: int,                   // Episode ID
+    title: string,             // Episode title
+    description: string,       // Episode description/summary
+    duration: int,             // Duration in seconds
+    publish-date: string,      // Formatted publish date (e.g., "11 Aug 2020")
+    url: string,               // MP3 file URL for streaming
+    file-size: string,         // Formatted file size (e.g., "9.2 MB")
+}

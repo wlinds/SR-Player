@@ -140,3 +140,151 @@ pub struct ProgramInfo {
     pub id: u32,
     pub name: Option<String>, // Name might be missing
 }
+
+// ============================================================================
+// PROGRAMS API MODELS (for podcasts)
+// ============================================================================
+
+// Response from the programs API endpoint
+// Example: https://api.sr.se/api/v2/programs?format=json
+//
+// This gives us all programs, including which ones have podcasts available
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProgramsResponse {
+    pub programs: Vec<Program>,
+    pub copyright: String,
+    pub pagination: Option<Pagination>,
+}
+
+// Represents a Sveriges Radio program (show)
+// Programs can be either live broadcasts or have podcast episodes available
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Program {
+    pub id: u32,
+    pub name: String,
+    pub description: Option<String>,
+
+    #[serde(rename = "programurl")]
+    pub program_url: Option<String>,
+
+    #[serde(rename = "programimage")]
+    pub program_image: Option<String>,
+
+    #[serde(rename = "programimagetemplate")]
+    pub program_image_template: Option<String>,
+
+    #[serde(rename = "programimagewide")]
+    pub program_image_wide: Option<String>,
+
+    #[serde(rename = "socialimage")]
+    pub social_image: Option<String>,
+
+    pub email: Option<String>,
+    pub phone: Option<String>,
+
+    pub channel: Option<ProgramChannel>,
+
+    #[serde(rename = "haspod")]
+    pub has_pod: bool, // IMPORTANT: tells us if this program has podcasts
+
+    #[serde(rename = "hasondemand")]
+    pub has_on_demand: bool, // Whether program has on-demand content
+
+    pub archived: bool, // Whether the program is archived (no longer active)
+
+    #[serde(rename = "programcategory", default)]
+    pub program_category: Option<ProgramCategory>,
+}
+
+// Channel information within a program
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProgramChannel {
+    pub id: u32,
+    pub name: String,
+}
+
+// Program category (e.g., Music, Sport, News)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProgramCategory {
+    pub id: u32,
+    pub name: String,
+}
+
+// ============================================================================
+// PODCAST FILES API MODELS
+// ============================================================================
+
+// Represents a single podcast episode
+// Note: We now fetch episodes using the episodes/index endpoint (see EpisodesResponse below),
+// but convert them to PodFile format for backward compatibility with the rest of the codebase.
+// TODO: Simplify
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PodFile {
+    pub id: u32,
+    pub title: String,
+    pub description: Option<String>,
+    pub url: String, // THE IMPORTANT ONE: URL to the MP3 file
+
+    #[serde(rename = "filesizeinbytes")]
+    pub file_size_in_bytes: u64, // Size of the podcast file
+
+    pub duration: u32, // Duration in seconds
+
+    #[serde(rename = "publishdateutc")]
+    pub publish_date_utc: String, // Publish date in /Date(ms)/ format
+
+    #[serde(rename = "availablefromutc")]
+    pub available_from_utc: String, // When the episode became available
+
+    pub program: ProgramInfo, // Associated program info
+
+    #[serde(rename = "statkey")]
+    pub stat_key: Option<String>,
+}
+
+// ============================================================================
+// EPISODES API MODELS
+// ============================================================================
+
+// Response from the episodes/index API endpoint
+// Example: https://api.sr.se/api/v2/episodes/index?programid=3718&format=json
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EpisodesResponse {
+    pub episodes: Vec<Episode>,
+    pub copyright: String,
+    pub pagination: Option<Pagination>,
+}
+
+// Represents a single episode from the episodes endpoint
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Episode {
+    pub id: u32,
+    pub title: String,
+    pub description: Option<String>,
+
+    #[serde(rename = "publishdateutc")]
+    pub publish_date_utc: String,
+
+    pub url: String,
+
+    #[serde(rename = "imageurl")]
+    pub image_url: Option<String>,
+
+    #[serde(rename = "listenpodfile")]
+    pub listen_podfile: Option<EpisodePodFile>,
+}
+
+// Podfile information within an episode
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EpisodePodFile {
+    pub title: String,
+    pub description: Option<String>,
+    pub url: String,
+    pub duration: u32,
+
+    #[serde(rename = "filesizeinbytes")]
+    pub file_size_in_bytes: u64,
+
+    #[serde(rename = "publishdateutc")]
+    pub publish_date_utc: String,
+}
