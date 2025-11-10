@@ -528,7 +528,10 @@ impl GaplessPlayer {
                 }
             }
 
-            info!("Initial buffer complete ({} bytes), starting playback...", initial_buffer.len());
+            info!(
+                "Initial buffer complete ({} bytes), starting playback...",
+                initial_buffer.len()
+            );
 
             // Send the buffered data immediately
             if data_tx.send(Bytes::from(initial_buffer)).is_err() {
@@ -585,7 +588,10 @@ impl GaplessPlayer {
             // This ensures we have data to probe when Symphonia initializes
             match data_rx.recv_timeout(Duration::from_secs(1)) {
                 Ok(first_chunk) => {
-                    info!("Received first chunk ({} bytes), creating decoder...", first_chunk.len());
+                    info!(
+                        "Received first chunk ({} bytes), creating decoder...",
+                        first_chunk.len()
+                    );
 
                     // Create our custom media source with the first chunk already received
                     let mut media_source = Box::new(ChannelMediaSource::new(data_rx));

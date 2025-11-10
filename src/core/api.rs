@@ -204,14 +204,10 @@ impl SrApiClient {
 
         debug!("Fetching podcast episodes from: {}", url);
 
-        let response = self
-            .client
-            .get(&url)
-            .send()
-            .context(format!(
-                "Failed to fetch podcast episodes for program {}",
-                program_id
-            ))?;
+        let response = self.client.get(&url).send().context(format!(
+            "Failed to fetch podcast episodes for program {}",
+            program_id
+        ))?;
 
         let episodes_response: EpisodesResponse = response
             .json()

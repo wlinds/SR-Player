@@ -54,13 +54,11 @@ pub fn episode_to_item(episode: &PodFile) -> Option<EpisodeItem> {
 }
 
 /// Fetch all programs with podcasts and return the raw Program data
-pub async fn fetch_programs_with_podcasts(
-    api_client: &SrApiClient,
-) -> Result<Vec<Program>> {
+pub async fn fetch_programs_with_podcasts(api_client: &SrApiClient) -> Result<Vec<Program>> {
     let api_clone = api_client.clone();
 
-    let programs = tokio::task::spawn_blocking(move || api_clone.get_programs_with_podcasts())
-        .await??;
+    let programs =
+        tokio::task::spawn_blocking(move || api_clone.get_programs_with_podcasts()).await??;
 
     println!("Fetched {} programs with podcasts", programs.len());
 
@@ -78,9 +76,9 @@ pub fn programs_to_items_podcasts(programs: &[Program]) -> Vec<ProgramItem> {
     let non_news_programs: Vec<_> = programs
         .iter()
         .filter(|p| {
-            !p.name.starts_with("Nyheter P4 ") &&
-            !p.name.starts_with("Ekot") &&
-            !p.name.contains("Ekonomiekot")
+            !p.name.starts_with("Nyheter P4 ")
+                && !p.name.starts_with("Ekot")
+                && !p.name.contains("Ekonomiekot")
         })
         .collect();
 
@@ -120,7 +118,10 @@ pub fn programs_to_items_podcasts(programs: &[Program]) -> Vec<ProgramItem> {
 /// 2. "P4 Local News" (group_id: -1) - Contains all regional P4 news programs
 ///
 /// The groups_expanded HashMap tracks which groups are currently expanded.
-pub fn programs_to_items_news(programs: &[Program], groups_expanded: &std::collections::HashMap<i32, bool>) -> Vec<ProgramItem> {
+pub fn programs_to_items_news(
+    programs: &[Program],
+    groups_expanded: &std::collections::HashMap<i32, bool>,
+) -> Vec<ProgramItem> {
     let mut result = Vec::new();
 
     // Separate P4, Ekot, and other programs
@@ -135,7 +136,10 @@ pub fn programs_to_items_news(programs: &[Program], groups_expanded: &std::colle
     // Add Ekot group first (news at top)
     if !ekot_programs.is_empty() {
         let ekot_group_id = -2; // Use negative ID for groups (different from P4)
-        let ekot_expanded = groups_expanded.get(&ekot_group_id).copied().unwrap_or(false);
+        let ekot_expanded = groups_expanded
+            .get(&ekot_group_id)
+            .copied()
+            .unwrap_or(false);
 
         // Add Ekot group header
         result.push(ProgramItem {
@@ -195,7 +199,8 @@ pub fn programs_to_items_news(programs: &[Program], groups_expanded: &std::colle
         if p4_expanded {
             for program in p4_programs {
                 if let Ok(id) = i32::try_from(program.id) {
-                    let region_name = program.name
+                    let region_name = program
+                        .name
                         .strip_prefix("Nyheter P4 ")
                         .unwrap_or(&program.name);
 
@@ -227,16 +232,17 @@ pub async fn fetch_episodes_for_program(
 ) -> Result<(Vec<EpisodeItem>, String)> {
     let api_clone = api_client.clone();
 
-    let episodes = tokio::task::spawn_blocking(move || api_clone.get_podcast_episodes(program_id))
-        .await??;
+    let episodes =
+        tokio::task::spawn_blocking(move || api_clone.get_podcast_episodes(program_id)).await??;
 
-    println!("Fetched {} episodes for program {}", episodes.len(), program_id);
+    println!(
+        "Fetched {} episodes for program {}",
+        episodes.len(),
+        program_id
+    );
 
     // Convert to Slint EpisodeItem structs
-    let episode_items: Vec<EpisodeItem> = episodes
-        .iter()
-        .filter_map(episode_to_item)
-        .collect();
+    let episode_items: Vec<EpisodeItem> = episodes.iter().filter_map(episode_to_item).collect();
 
     // Get program name for the header
     let program_name = if !episodes.is_empty() {

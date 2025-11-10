@@ -75,24 +75,21 @@ async fn update_program_info(
 ) -> Option<String> {
     // Fetch current program information in a blocking task
     let api_clone = api_client.clone();
-    let program_info = tokio::task::spawn_blocking(move || {
-        match api_clone.get_schedule_right_now() {
-            Ok(schedule) => {
-                schedule
-                    .channels
-                    .iter()
-                    .find(|ch| ch.id == channel_id as u32)
-                    .and_then(|ch| ch.current_episode.clone())
-            }
+    let program_info =
+        tokio::task::spawn_blocking(move || match api_clone.get_schedule_right_now() {
+            Ok(schedule) => schedule
+                .channels
+                .iter()
+                .find(|ch| ch.id == channel_id as u32)
+                .and_then(|ch| ch.current_episode.clone()),
             Err(e) => {
                 eprintln!("Failed to fetch schedule: {}", e);
                 None
             }
-        }
-    })
-    .await
-    .ok()
-    .flatten();
+        })
+        .await
+        .ok()
+        .flatten();
 
     // Update UI with program information
     if let Some(episode) = program_info {
@@ -318,12 +315,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if let Some(episode) = program_info {
                     // Download image bytes in blocking task
                     let image_url = episode.social_image.clone().unwrap_or_default();
-                    let image_bytes = tokio::task::spawn_blocking(move || {
-                        download_image_bytes(&image_url)
-                    })
-                    .await
-                    .ok()
-                    .flatten();
+                    let image_bytes =
+                        tokio::task::spawn_blocking(move || download_image_bytes(&image_url))
+                            .await
+                            .ok()
+                            .flatten();
 
                     ui_clone
                         .upgrade_in_event_loop(move |ui| {
@@ -449,7 +445,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                             // Show filtered data for Podcasts tab
                             if let Err(e) = ui_clone.upgrade_in_event_loop(move |ui| {
-                                let program_items = core::podcast::programs_to_items_podcasts(&programs);
+                                let program_items =
+                                    core::podcast::programs_to_items_podcasts(&programs);
                                 let programs_model = Rc::new(VecModel::from(program_items));
                                 ui.set_programs(ModelRc::from(programs_model));
                                 ui.set_programs_loaded(true);
@@ -483,7 +480,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 // Filter existing data for News tab
                 let all_programs_lock = all_programs_clone_news.lock().unwrap();
                 let groups_expanded_lock = groups_expanded_clone_news.lock().unwrap();
-                let program_items = core::podcast::programs_to_items_news(&all_programs_lock, &groups_expanded_lock);
+                let program_items = core::podcast::programs_to_items_news(
+                    &all_programs_lock,
+                    &groups_expanded_lock,
+                );
                 let programs_model = Rc::new(VecModel::from(program_items));
                 ui.set_news_programs(ModelRc::from(programs_model));
             } else {
@@ -507,7 +507,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             // Show filtered data for News tab
                             if let Err(e) = ui_clone.upgrade_in_event_loop(move |ui| {
                                 let groups_expanded_lock = groups_expanded_clone2.lock().unwrap();
-                                let program_items = core::podcast::programs_to_items_news(&programs, &groups_expanded_lock);
+                                let program_items = core::podcast::programs_to_items_news(
+                                    &programs,
+                                    &groups_expanded_lock,
+                                );
                                 let programs_model = Rc::new(VecModel::from(program_items));
                                 ui.set_news_programs(ModelRc::from(programs_model));
                                 ui.set_news_loaded(true);
@@ -535,7 +538,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let api_clone = api_client_clone.clone();
 
             runtime_handle.spawn(async move {
-                match core::podcast::fetch_episodes_for_program(&api_clone, program_id as u32).await {
+                match core::podcast::fetch_episodes_for_program(&api_clone, program_id as u32).await
+                {
                     Ok((episode_items, program_name)) => {
                         if let Err(e) = ui_clone.upgrade_in_event_loop(move |ui| {
                             let episodes_model = Rc::new(VecModel::from(episode_items));
@@ -567,7 +571,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let api_clone = api_client_clone.clone();
 
             runtime_handle.spawn(async move {
-                match core::podcast::fetch_episodes_for_program(&api_clone, program_id as u32).await {
+                match core::podcast::fetch_episodes_for_program(&api_clone, program_id as u32).await
+                {
                     Ok((episode_items, program_name)) => {
                         if let Err(e) = ui_clone.upgrade_in_event_loop(move |ui| {
                             let episodes_model = Rc::new(VecModel::from(episode_items));
@@ -635,7 +640,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     start_time: "".into(), // Not applicable for podcasts
                     end_time: episode.publish_date.clone(), // Show publish date instead
                     show_image: slint::Image::default(), // Will be updated below if image is available
-                    program_id: 0, // Not applicable for episodes
+                    program_id: 0,                       // Not applicable for episodes
                     has_podcasts: false,
                 });
 
@@ -652,12 +657,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                     runtime_handle.spawn(async move {
                         // Download image bytes in blocking task
-                        let image_bytes = tokio::task::spawn_blocking(move || {
-                            download_image_bytes(&image_url)
-                        })
-                        .await
-                        .ok()
-                        .flatten();
+                        let image_bytes =
+                            tokio::task::spawn_blocking(move || download_image_bytes(&image_url))
+                                .await
+                                .ok()
+                                .flatten();
 
                         // Update UI with image on main thread
                         let _ = ui_clone_for_image.upgrade_in_event_loop(move |ui| {
@@ -740,7 +744,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             // Toggle group expansion state
             {
                 let mut groups_expanded_lock = groups_expanded_clone.lock().unwrap();
-                let current_state = groups_expanded_lock.get(&group_id).copied().unwrap_or(false);
+                let current_state = groups_expanded_lock
+                    .get(&group_id)
+                    .copied()
+                    .unwrap_or(false);
                 groups_expanded_lock.insert(group_id, !current_state);
             }
 
@@ -752,12 +759,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 if current_tab == 2 {
                     // News tab - show only news programs
-                    let program_items = core::podcast::programs_to_items_news(&all_programs_lock, &groups_expanded_lock);
+                    let program_items = core::podcast::programs_to_items_news(
+                        &all_programs_lock,
+                        &groups_expanded_lock,
+                    );
                     let programs_model = Rc::new(VecModel::from(program_items));
                     ui.set_news_programs(ModelRc::from(programs_model));
                 } else if current_tab == 1 {
                     // Podcasts tab - exclude news programs
-                    let program_items = core::podcast::programs_to_items_podcasts(&all_programs_lock);
+                    let program_items =
+                        core::podcast::programs_to_items_podcasts(&all_programs_lock);
                     let programs_model = Rc::new(VecModel::from(program_items));
                     ui.set_programs(ModelRc::from(programs_model));
                 }
@@ -805,7 +816,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 if let Some(id) = channel_id {
                     // Fetch and update program information
-                    if let Some(new_title) = update_program_info(&ui_weak, &api_client_clone, id).await {
+                    if let Some(new_title) =
+                        update_program_info(&ui_weak, &api_client_clone, id).await
+                    {
                         // Check if the program has changed
                         if last_program_title.as_ref() != Some(&new_title) {
                             println!("Program changed to: {}", new_title);

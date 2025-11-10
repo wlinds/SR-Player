@@ -26,7 +26,6 @@ pub fn parse_sr_date_to_time(date_str: &str) -> String {
     String::from("--:--")
 }
 
-
 /// Download image bytes from a URL
 ///
 /// Returns raw bytes which are Send-safe for use across threads.
@@ -53,11 +52,8 @@ pub fn bytes_to_slint_image(bytes: Vec<u8>) -> Option<Image> {
         Ok(img) => {
             let rgba = img.to_rgba8();
             let (width, height) = rgba.dimensions();
-            let buffer = slint::SharedPixelBuffer::clone_from_slice(
-                &rgba.into_raw(),
-                width,
-                height,
-            );
+            let buffer =
+                slint::SharedPixelBuffer::clone_from_slice(&rgba.into_raw(), width, height);
             Some(Image::from_rgba8(buffer))
         }
         Err(e) => {
@@ -65,12 +61,4 @@ pub fn bytes_to_slint_image(bytes: Vec<u8>) -> Option<Image> {
             None
         }
     }
-}
-
-/// Download and convert image in one call (convenience function)
-///
-/// Use this when you're already on the main thread or in a blocking context.
-/// For async code with spawn_blocking, use download_image_bytes + bytes_to_slint_image separately.
-pub fn download_and_convert_image(url: &str) -> Option<Image> {
-    download_image_bytes(url).and_then(bytes_to_slint_image)
 }
