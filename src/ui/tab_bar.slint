@@ -1,0 +1,78 @@
+// TabBar Component - Reusable tab navigation bar
+//
+// This component creates a horizontal row of tabs with:
+// - Dynamic tab generation from a list
+// - Active/inactive styling
+// - Click handling for tab selection
+//
+// Usage: Pass an array of tab names and handle the tab-clicked callback
+
+import { HorizontalBox } from "std-widgets.slint";
+
+// Data structure for a single tab
+export struct TabItem {
+    id: int,           // Tab index (0, 1, 2, 3, etc.)
+    label: string,     // Tab display text ("Live", "Podcasts", etc.)
+}
+
+// TabBar component that generates tabs from a list
+export component TabBar inherits Rectangle {
+    // ================================================================
+    // PROPERTIES
+    // ================================================================
+
+    // Current active tab index
+    in-out property <int> current-tab: 0;
+
+    // List of tabs to display
+    in property <[TabItem]> tabs: [
+        { id: 0, label: "Live" },
+        { id: 1, label: "Podcasts" },
+        { id: 2, label: "News" },
+        { id: 3, label: "Music" }
+    ];
+
+    // Visual properties
+    in property <color> active-background: #3a3a3a;
+    in property <color> inactive-background: #2a2a2a;
+    in property <color> text-color: #ffffff;
+    in property <int> tab-height: 60;
+
+    // ================================================================
+    // CALLBACKS
+    // ================================================================
+
+    // Called when any tab is clicked
+    callback tab-clicked(int);  // Parameters: (tab_id)
+
+    // ================================================================
+    // LAYOUT
+    // ================================================================
+
+    height: tab-height * 1px;
+
+    HorizontalBox {
+        spacing: 0px;
+
+        // Generate tabs dynamically from the tabs array
+        for tab[index] in tabs: Rectangle {
+            horizontal-stretch: 1;
+            background: current-tab == tab.id ? active-background : inactive-background;
+
+            TouchArea {
+                clicked => {
+                    current-tab = tab.id;
+                    root.tab-clicked(tab.id);
+                }
+            }
+
+            Text {
+                text: tab.label;
+                font-size: 14px;
+                color: text-color;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+        }
+    }
+}

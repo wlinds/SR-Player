@@ -1,5 +1,10 @@
 // Slint UI definition for SR Player
 //
+// This is the main application window that brings together all UI components:
+// - NowPlaying: Shows current channel and program information
+// - TabContent: Reusable component for Live, Podcasts, News, Music tabs
+// - Tab navigation and content switching
+//
 // SLINT is a declarative UI framework (like HTML/CSS or SwiftUI)
 //
 // Compare to:
@@ -16,44 +21,34 @@
 // Like: import { Button } from 'react' or from tkinter import Button
 import { Button, VerticalBox, HorizontalBox, ListView, ScrollView } from "std-widgets.slint";
 
-// Define a struct to represent a channel in the UI
-// This is like a TypeScript interface or Python dataclass:
-//
-// Python equivalent:
-//   @dataclass
-//   class ChannelItem:
-//       id: int
-//       name: str
-//       stream_url: str
-//
-// TypeScript equivalent:
-//   interface ChannelItem {
-//       id: number;
-//       name: string;
-//       stream_url: string;
-//   }
-export struct ChannelItem {
-    id: int,           // Channel ID (like 132 for SR P1)
-    name: string,      // Channel name (like "SR P1")
-    stream-url: string, // URL to the MP3 stream
-}
 
-// Struct to represent currently playing program information
-export struct ProgramInfo {
-    title: string,           // Current program title
-    description: string,     // Program description
-    start-time: string,      // Start time (formatted)
-    end-time: string,        // End time (formatted)
-    show-image: image,       // Show image (loaded from URL)
-}
+import { ChannelItem, ProgramInfo, ProgramItem, EpisodeItem } from "types.slint";
+
+import { NowPlaying } from "now_playing.slint";
+import { TabContent } from "tab_content.slint";
+import { TabBar, TabItem } from "tab_bar.slint";
+
+// Re-export types so they're available to Rust code
+export { ChannelItem, ProgramInfo, ProgramItem, EpisodeItem }
 
 // Main application window component
 // Like <App> component in React or main() window in Tkinter
 export component MainWindow inherits Window {
-    // PROPERTIES (like React state or instance variables)
-    // These can be accessed and modified from Rust code
+    // ================================================================
+    // WINDOW PROPERTIES
+    // ================================================================
+    title: "SR Player - Sveriges Radio";
+    min-width: 300px;
+    min-height: 300px;
+    preferred-width: 360px;
+    preferred-height: 600px;
+    background: #1a1a1a;
 
-    // in-out means the property can be read and written from outside
+    // ================================================================
+    // APPLICATION STATE
+    // ================================================================
+
+    // Current playback state
     in-out property <string> current-channel-name: "No channel selected";
     in-out property <bool> is-playing: false;
     in-out property <bool> is-loading: false;
@@ -62,128 +57,75 @@ export component MainWindow inherits Window {
         description: "",
         start-time: "",
         end-time: "",
-        show-image: @image-url("")
+        show-image: @image-url(""),
+        program-id: 0,
+        has-podcasts: false
     };
 
-    // Array of channels (like a JavaScript array or Python list)
-    // This will be populated from Rust with data from the SR API
+    // Tab management (0=Live, 1=Podcasts, 2=News, 3=Music)
+    in-out property <int> current-tab: 0;
+
+    // Data arrays for different tabs
     in-out property <[ChannelItem]> channels: [];
+    in-out property <[ProgramItem]> programs: [];  // For Podcasts tab
+    in-out property <[ProgramItem]> news-programs: [];  // For News tab
+    in-out property <[EpisodeItem]> episodes: [];
 
-    // CALLBACKS (like JavaScript event handlers or Python callback functions)
-    // These are called when user interacts with the UI
-    // The actual implementation is in Rust
+    // View state for Podcasts/News tabs
+    in-out property <string> selected-program-name: "";
+    in-out property <int> selected-program-id: 0;
+    in-out property <bool> show-episodes-view: false;
+    in-out property <bool> programs-loaded: false;
+    in-out property <bool> news-loaded: false;
 
-    // Called when user clicks on a channel
-    // Like: onClick={(id, url) => { ... }} in React
-    callback channel-selected(int, string);  // Parameters: (channel_id, stream_url)
+    // ================================================================
+    // CALLBACKS (Event Handlers)
+    // ================================================================
 
-    // Called when user clicks stop
+    // Channel selection (Live tab)
+    callback channel-selected(int, string);  // (channel_id, stream_url)
+
+    // Playback controls
     callback stop-clicked();
 
-    // Window properties
-    title: "SR Player - Sveriges Radio";
-    preferred-width: 800px;
-    preferred-height: 600px;
-    background: #1a1a1a;
+    // Program browsing
+    callback browse-podcasts-clicked(int);  // (program_id)
+    callback program-selected(int);         // (program_id)
+    callback episode-selected(int);         // (episode_id)
+    callback back-to-programs-clicked();
 
-    // Main layout - vertical arrangement of elements
-    // Like <div style="display: flex; flex-direction: column"> in CSS
+    // Tab navigation
+    callback podcasts-tab-clicked();
+    callback news-tab-clicked();
+
+    // Group expansion (for P4 Local News, Ekot News)
+    callback group-toggled(int);  // (group_id)
+
+    // Pagination (if needed)
+    callback load-more-programs();
+
+    // ================================================================
+    // MAIN LAYOUT
+    // ================================================================
     VerticalBox {
         padding: 16px;
         spacing: 12px;
 
         // ================================================================
-        // HEADER SECTION
-        // ================================================================
-        // HorizontalBox {
-        //     alignment: center;
-
-        //     Text {
-        //         text: "SR Player";
-        //         font-size: 24px;
-        //         font-weight: 700;
-        //         color: #ffffff;
-        //     }
-        // }
-
-        // ================================================================
         // NOW PLAYING SECTION
         // ================================================================
-        Rectangle {
-            background: #2a2a2a;
-            border-radius: 8px;
-            min-height: 180px;
+        NowPlaying {
+            current-channel-name: root.current-channel-name;
+            is-playing: root.is-playing;
+            is-loading: root.is-loading;
+            current-program: root.current-program;
 
-            VerticalBox {
-                padding: 16px;
-                spacing: 8px;
+            browse-podcasts-clicked(program-id) => {
+                root.browse-podcasts-clicked(program-id);
+            }
 
-                Text {
-                    text: "Now Playing";
-                    font-size: 14px;
-                    color: #888888;
-                }
-
-                Text {
-                    // Shows current channel name, or "No channel selected"
-                    text: current-channel-name;
-                    font-size: 18px;
-                    font-weight: 600;
-                    color: #ffffff;
-                }
-
-                // Status indicator
-                Text {
-                    // Conditional text - like JavaScript ternary operator:
-                    // is_playing ? "Playing..." : "Stopped"
-                    text: is-loading ? "Loading..." :
-                          is-playing ? "▶ Playing..." : "⏸ Stopped";
-                    font-size: 14px;
-                    color: is-playing ? #4CAF50 : #888888;  // Green if playing, gray if not
-                }
-
-                // Show program information if available
-                if current-program.title != "": HorizontalBox {
-                    spacing: 12px;
-                    padding-top: 8px;
-
-                    // Show image to the left of program info
-                    Image {
-                        source: current-program.show-image;
-                        width: 80px;
-                        height: 80px;
-                        image-fit: cover;
-                    }
-
-                    VerticalBox {
-                        spacing: 6px;
-
-                        // Program title
-                        Text {
-                            text: current-program.title;
-                            font-size: 16px;
-                            font-weight: 600;
-                            color: #e0e0e0;
-                        }
-
-                        // Time range
-                        if current-program.start-time != "": Text {
-                            text: current-program.start-time + " - " + current-program.end-time;
-                            font-size: 13px;
-                            color: #aaaaaa;
-                        }
-
-                        // Program description
-                        if current-program.description != "": Text {
-                            text: current-program.description;
-                            font-size: 12px;
-                            color: #999999;
-                            wrap: word-wrap;
-                            overflow: elide;
-                            max-height: 40px;
-                        }
-                    }
-                }
+            stop-clicked => {
+                root.stop-clicked();
             }
         }
 
@@ -194,75 +136,133 @@ export component MainWindow inherits Window {
             spacing: 8px;
             alignment: center;
 
-            // Stop button
+            // Stop button (only enabled when playing)
             Button {
                 text: "Stop";
                 enabled: is-playing && !is-loading;
-
                 clicked => {
                     stop-clicked();
                 }
             }
-        }
 
-        // ================================================================
-        // CHANNEL LIST
-        // ================================================================
-        Text {
-            text: "Available Channels";
-            font-size: 16px;
-            font-weight: 600;
-            color: #ffffff;
-        }
-
-        // Scrollable list of channels
-        // Like <div style="overflow-y: scroll"> in HTML
-        ScrollView {
-            // Use remaining vertical space
-            vertical-stretch: 1;
-
-            // ListView is like map() in React:
-            // channels.map(channel => <ChannelListItem channel={channel} />)
-            VerticalLayout {
-                spacing: 4px;
-
-                // For each channel in the channels array, create a button
-                for channel in channels: Rectangle {
-                    height: 50px;
-                    background: channel-touch.has-hover ? #3a3a3a : #2a2a2a;
-                    border-radius: 4px;
-
-                    // TouchArea makes the rectangle clickable
-                    // Like adding onClick to a div in React
-                    channel-touch := TouchArea {
-                        clicked => {
-                            // When clicked, call the callback with channel data
-                            channel-selected(channel.id, channel.stream-url);
-                        }
-                    }
-
-                    HorizontalBox {
-                        padding: 12px;
-                        spacing: 8px;
-
-                        Text {
-                            text: channel.name;
-                            font-size: 16px;
-                            color: #ffffff;
-                            vertical-alignment: center;
-                        }
-                    }
-                }
-
-                // Show message if no channels loaded
-                if channels.length == 0: Text {
-                    text: "Loading channels...";
-                    color: #888888;
-                    horizontal-alignment: center;
-                    vertical-alignment: center;
+            // Browse Podcasts button (only shown when current program has podcasts)
+            if current-program.has-podcasts && current-program.program-id > 0: Button {
+                text: "Browse Podcasts";
+                clicked => {
+                    browse-podcasts-clicked(current-program.program-id);
                 }
             }
         }
 
+        // ================================================================
+        // TAB NAVIGATION
+        // ================================================================
+        TabBar {
+            current-tab <=> root.current-tab;  // Two-way binding
+
+            tab-clicked(tab-id) => {
+                // Handle special logic for specific tabs
+                if (tab-id == 1) {
+                    // Podcasts tab
+                    show-episodes-view = false;
+                    podcasts-tab-clicked();
+                } else if (tab-id == 2) {
+                    // News tab
+                    news-tab-clicked();
+                }
+                // For Live (0) and Music (3), just switching the tab is enough
+            }
+        }
+
+        // ================================================================
+        // TAB CONTENT AREA
+        // ================================================================
+
+        // Live Tab - Channel list
+        if current-tab == 0: TabContent {
+            is-channels-tab: true;
+            channels: root.channels;
+            is-loaded: true;
+            loading-text: "Loading channels...";
+            empty-text: "No channels found";
+
+            channel-selected(id, url) => {
+                root.channel-selected(id, url);
+            }
+        }
+
+        // Podcasts Tab - Programs list or episodes
+        if current-tab == 1: TabContent {
+            // Switch between programs list and episodes view
+            show-back-button: show-episodes-view;
+            selected-program-name: root.selected-program-name;
+
+            // Show either programs or episodes
+            is-programs-tab: !show-episodes-view;
+            is-episodes-tab: show-episodes-view;
+
+            programs: root.programs;
+            episodes: root.episodes;
+            is-loaded: programs-loaded;
+            loading-text: "Loading programs...";
+            empty-text: show-episodes-view ? "No episodes found" : "No programs found";
+
+            program-selected(id) => {
+                root.program-selected(id);
+            }
+
+            group-toggled(id) => {
+                root.group-toggled(id);
+            }
+
+            episode-selected(id) => {
+                root.episode-selected(id);
+            }
+
+            back-clicked => {
+                root.back-to-programs-clicked();
+            }
+        }
+
+        // News Tab - News programs with groups (same structure as Podcasts)
+        if current-tab == 2: TabContent {
+            // Switch between programs list and episodes view
+            show-back-button: show-episodes-view;
+            selected-program-name: root.selected-program-name;
+
+            // Show either programs or episodes
+            is-programs-tab: !show-episodes-view;
+            is-episodes-tab: show-episodes-view;
+
+            programs: root.news-programs;
+            episodes: root.episodes;
+            is-loaded: news-loaded;
+            loading-text: "Loading news programs...";
+            empty-text: show-episodes-view ? "No episodes found" : "No news programs found";
+
+            program-selected(id) => {
+                root.program-selected(id);
+            }
+
+            group-toggled(id) => {
+                root.group-toggled(id);
+            }
+
+            episode-selected(id) => {
+                root.episode-selected(id);
+            }
+
+            back-clicked => {
+                root.back-to-programs-clicked();
+            }
+        }
+
+        // Music Tab - Placeholder using TabContent
+        if current-tab == 3: TabContent {
+            show-simple-text: true;
+            simple-text: "Music content coming soon...";
+            simple-text-color: #888888;
+            is-loaded: true;
+        }
     }
 }

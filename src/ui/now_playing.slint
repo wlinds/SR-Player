@@ -1,0 +1,120 @@
+// NowPlaying Component - Displays currently playing channel and program information
+// This component shows:
+// - The current channel name
+// - Playing/stopped/loading status
+// - Current program details (when available)
+// - Program image, title, time, and description
+
+import { VerticalBox, HorizontalBox } from "std-widgets.slint";
+import { ProgramInfo } from "types.slint";
+
+export component NowPlaying inherits Rectangle {
+    // ================================================================
+    // PROPERTIES
+    // ================================================================
+
+    // Current channel being played (or "No channel selected")
+    in-out property <string> current-channel-name: "No channel selected";
+
+    // Playback state flags
+    in-out property <bool> is-playing: false;
+    in-out property <bool> is-loading: false;
+
+    // Current program information (populated when a channel is playing)
+    in-out property <ProgramInfo> current-program;
+
+    // ================================================================
+    // CALLBACKS
+    // ================================================================
+
+    // Called when user clicks "Browse Podcasts" button for current program
+    callback browse-podcasts-clicked(int);  // Parameters: (program_id)
+
+    // Called when user clicks "Stop" button
+    callback stop-clicked();
+
+    // ================================================================
+    // VISUAL STYLING
+    // ================================================================
+    background: #2a2a2a;
+    border-radius: 8px;
+    min-height: 180px;
+
+    // ================================================================
+    // LAYOUT
+    // ================================================================
+    VerticalBox {
+        padding: 16px;
+        spacing: 8px;
+
+        // Section title
+        Text {
+            text: "Now Playing";
+            font-size: 14px;
+            color: #888888;
+        }
+
+        // Channel name (main text)
+        Text {
+            text: current-channel-name;
+            font-size: 18px;
+            font-weight: 600;
+            color: #ffffff;
+        }
+
+        // Status indicator - shows different states:
+        // - "Loading..." when buffering
+        // - "▶ Playing..." when active
+        // - "⏸ Stopped" when inactive
+        Text {
+            text: is-loading ? "Loading..." :
+                  is-playing ? "▶ Playing..." : "⏸ Stopped";
+            font-size: 14px;
+            color: is-playing ? #4CAF50 : #888888;  // Green when playing, gray otherwise
+        }
+
+        // Program information section (only visible when program data exists)
+        if current-program.title != "": HorizontalBox {
+            spacing: 12px;
+            padding-top: 8px;
+
+            // Program image/thumbnail
+            Image {
+                source: current-program.show-image;
+                width: 80px;
+                height: 80px;
+                image-fit: cover;  // Ensures image fills the space without distortion
+            }
+
+            // Program text details
+            VerticalBox {
+                spacing: 6px;
+
+                // Program title
+                Text {
+                    text: current-program.title;
+                    font-size: 16px;
+                    font-weight: 600;
+                    color: #e0e0e0;
+                }
+
+                // Time range (e.g., "09:00 - 12:00")
+                if current-program.start-time != "": Text {
+                    text: current-program.start-time + " - " + current-program.end-time;
+                    font-size: 13px;
+                    color: #aaaaaa;
+                }
+
+                // Program description (truncated if too long)
+                if current-program.description != "": Text {
+                    text: current-program.description;
+                    font-size: 12px;
+                    color: #999999;
+                    wrap: word-wrap;      // Allow text to wrap to multiple lines
+                    overflow: elide;      // Add "..." if text is too long
+                    max-height: 40px;     // Limit to ~3 lines of text
+                }
+            }
+        }
+    }
+}
