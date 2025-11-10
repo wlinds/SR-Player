@@ -2,7 +2,7 @@
 //
 // This module provides utility functions for:
 // - Fetching programs and episodes from the SR API
-// - Converting API models (Program, PodFile) to UI models (ProgramItem, EpisodeItem)
+// - Converting API models (Program, Episode) to UI models (ProgramItem, EpisodeItem)
 // - Organizing programs into groups (Podcasts vs News tabs)
 // - Handling expandable groups (P4 Local News, Ekot News)
 
@@ -10,7 +10,7 @@ use anyhow::Result;
 use slint::Image;
 
 use crate::core::api::SrApiClient;
-use crate::core::models::{PodFile, Program};
+use crate::core::models::{Episode, Program};
 use crate::{EpisodeItem, ProgramItem};
 
 /// Parse SR API date format /Date(milliseconds)/ and convert to a readable format
@@ -31,11 +31,14 @@ fn parse_sr_date_to_display(date_str: &str) -> String {
     String::from("Unknown")
 }
 
-/// Convert a PodFile to an EpisodeItem (for Slint UI)
-pub fn episode_to_item(episode: &PodFile) -> Option<EpisodeItem> {
+/// Convert an Episode to an EpisodeItem (for Slint UI)
+pub fn episode_to_item(episode: &Episode) -> Option<EpisodeItem> {
+    // Episodes must have a listen_podfile to be playable
+    let podfile = episode.listen_podfile.as_ref()?;
+
     i32::try_from(episode.id).ok().map(|id| {
         // Format file size (bytes to MB)
-        let file_size_mb = episode.file_size_in_bytes as f64 / 1_048_576.0;
+        let file_size_mb = podfile.file_size_in_bytes as f64 / 1_048_576.0;
         let file_size_str = format!("{:.1} MB", file_size_mb);
 
         // Format publish date
@@ -45,9 +48,9 @@ pub fn episode_to_item(episode: &PodFile) -> Option<EpisodeItem> {
             id,
             title: episode.title.clone().into(),
             description: episode.description.clone().unwrap_or_default().into(),
-            duration: episode.duration as i32,
+            duration: podfile.duration as i32,
             publish_date: publish_date.into(),
-            url: episode.url.clone().into(),
+            url: podfile.url.clone().into(),
             file_size: file_size_str.into(),
         }
     })
@@ -244,16 +247,8 @@ pub async fn fetch_episodes_for_program(
     // Convert to Slint EpisodeItem structs
     let episode_items: Vec<EpisodeItem> = episodes.iter().filter_map(episode_to_item).collect();
 
-    // Get program name for the header
-    let program_name = if !episodes.is_empty() {
-        episodes[0]
-            .program
-            .name
-            .clone()
-            .unwrap_or_else(|| String::from("Podcast"))
-    } else {
-        String::from("Podcast")
-    };
+    // Use a generic program name (the UI already knows which program was selected)
+    let program_name = String::from("Podcast Episodes");
 
     Ok((episode_items, program_name))
 }

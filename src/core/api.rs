@@ -11,7 +11,7 @@ use anyhow::{Context, Result};
 use log::{debug, info};
 
 use crate::core::models::{
-    Channel, ChannelsResponse, EpisodesResponse, PodFile, Program, ProgramsResponse,
+    Channel, ChannelsResponse, Episode, EpisodesResponse, Program, ProgramsResponse,
     ScheduleRightNowResponse,
 };
 
@@ -182,19 +182,19 @@ impl SrApiClient {
 
     /// Fetches the 25 most recent podcast episodes for a specific program
     ///
-    /// Uses the episodes/index endpoint (not podfiles) which supports reliable server-side sorting.
+    /// Uses the episodes/index endpoint which supports reliable server-side sorting.
     /// Episodes are sorted by publish date (newest first) and limited to 25 results.
     ///
-    /// Returns a Vec of PodFile structs (converted from Episode objects)
+    /// Returns a Vec of Episode structs
     ///
     /// Example:
     /// ```
     /// let episodes = client.get_podcast_episodes(4916)?;
     /// for episode in episodes {
-    ///     println!("Episode: {} - Duration: {}s", episode.title, episode.duration);
+    ///     println!("Episode: {}", episode.title);
     /// }
     /// ```
-    pub fn get_podcast_episodes(&self, program_id: u32) -> Result<Vec<PodFile>> {
+    pub fn get_podcast_episodes(&self, program_id: u32) -> Result<Vec<Episode>> {
         // Use episodes/index endpoint for reliable server-side sorting
         // sort=publishdateutc%2Bdesc (%2B = URL-encoded '+') gives newest episodes first
         let url = format!(
@@ -219,35 +219,14 @@ impl SrApiClient {
             program_id
         );
 
-        // Convert Episode objects to PodFile format
-        // Episodes have a listen_podfile field that contains the audio file info
-        let podfiles: Vec<PodFile> = episodes_response
+        // Filter out episodes without podcast files
+        let episodes: Vec<Episode> = episodes_response
             .episodes
             .into_iter()
-            .filter_map(|episode| {
-                // Only include episodes that have an actual podcast file
-                episode.listen_podfile.map(|podfile| {
-                    let publish_date = podfile.publish_date_utc.clone();
-                    PodFile {
-                        id: episode.id,
-                        title: episode.title,
-                        description: episode.description,
-                        url: podfile.url,
-                        file_size_in_bytes: podfile.file_size_in_bytes,
-                        duration: podfile.duration,
-                        publish_date_utc: podfile.publish_date_utc,
-                        available_from_utc: publish_date, // Same as publish date for episodes
-                        program: crate::core::models::ProgramInfo {
-                            id: program_id,
-                            name: None,
-                        },
-                        stat_key: None,
-                    }
-                })
-            })
+            .filter(|episode| episode.listen_podfile.is_some())
             .collect();
 
-        Ok(podfiles)
+        Ok(episodes)
     }
 }
 
