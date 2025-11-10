@@ -617,7 +617,6 @@ impl GaplessPlayer {
                 }
                 Err(e) => {
                     error!("Timeout waiting for initial data: {}", e);
-                    return;
                 }
             }
         });
