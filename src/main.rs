@@ -33,7 +33,7 @@ mod core; // This loads src/core/mod.rs
 // Or: import { SrApiClient } from './core/api' in JavaScript
 use core::api::SrApiClient;
 use core::gapless_send_safe::SendSafeGaplessPlayer; // M3: Send-safe gapless streaming!
-use core::utils::{bytes_to_slint_image, download_image_bytes, parse_sr_date_to_time};
+use core::utils::{bytes_to_slint_image, fetch_image_bytes, parse_sr_date_to_time};
 
 // Import Slint types
 use slint::{Model, ModelRc, VecModel};
@@ -66,6 +66,230 @@ fn empty_program_info() -> ProgramInfo {
     }
 }
 
+/// Macro to reduce duplication in tab loading callbacks
+/// Handles lazy loading of programs with caching
+macro_rules! setup_tab_loader {
+    (
+        ui = $ui:expr,
+        runtime = $runtime:expr,
+        api_client = $api:expr,
+        all_programs = $all_programs:expr,
+        groups_expanded = $groups_expanded:expr,
+        callback = $callback:ident,
+        filter = $filter_fn:expr,
+        set_model = $set_model:expr,
+        set_loaded = $set_loaded:expr
+    ) => {{
+        let ui_weak = $ui.as_weak();
+        let runtime_handle = $runtime.handle().clone();
+        let api_client_clone = $api.clone();
+        let all_programs_clone = $all_programs.clone();
+        let groups_expanded_clone = $groups_expanded.clone();
+
+        $ui.$callback(move || {
+            let ui = ui_weak.upgrade().unwrap();
+
+            // Check if data is already loaded
+            let programs_available = {
+                let all_programs_lock = all_programs_clone.lock().unwrap();
+                !all_programs_lock.is_empty()
+            };
+
+            if programs_available {
+                // Use cached data
+                let all_programs_lock = all_programs_clone.lock().unwrap();
+                let groups_expanded_lock = groups_expanded_clone.lock().unwrap();
+                let program_items = $filter_fn(&all_programs_lock, &groups_expanded_lock);
+                let programs_model = Rc::new(VecModel::from(program_items));
+                $set_model(&ui, ModelRc::from(programs_model));
+            } else {
+                // Fetch fresh data
+                let ui_clone = ui_weak.clone();
+                let api_clone = api_client_clone.clone();
+                let all_programs_clone2 = all_programs_clone.clone();
+                let groups_expanded_clone2 = groups_expanded_clone.clone();
+
+                runtime_handle.spawn(async move {
+                    match core::podcast::fetch_programs_with_podcasts(&api_clone).await {
+                        Ok(programs) => {
+                            // Cache the programs
+                            {
+                                let mut all_programs_lock = all_programs_clone2.lock().unwrap();
+                                *all_programs_lock = programs.clone();
+                            }
+
+                            // Update UI
+                            if let Err(e) = ui_clone.upgrade_in_event_loop(move |ui| {
+                                let groups_expanded_lock = groups_expanded_clone2.lock().unwrap();
+                                let program_items = $filter_fn(&programs, &groups_expanded_lock);
+                                let programs_model = Rc::new(VecModel::from(program_items));
+                                $set_model(&ui, ModelRc::from(programs_model));
+                                $set_loaded(&ui);
+                            }) {
+                                eprintln!("Failed to update UI with programs: {:?}", e);
+                            }
+                        }
+                        Err(e) => eprintln!("Failed to fetch programs: {}", e),
+                    }
+                });
+            }
+        });
+    }};
+}
+
+/// Macro to reduce duplication in episode fetching callbacks
+macro_rules! setup_episode_fetcher {
+    (
+        ui = $ui:expr,
+        runtime = $runtime:expr,
+        api_client = $api:expr,
+        callback = $callback:ident,
+        switch_tab = $switch_tab:expr
+    ) => {{
+        let ui_weak = $ui.as_weak();
+        let runtime_handle = $runtime.handle().clone();
+        let api_client_clone = $api.clone();
+
+        $ui.$callback(move |program_id| {
+            let ui_clone = ui_weak.clone();
+            let api_clone = api_client_clone.clone();
+
+            runtime_handle.spawn(async move {
+                match core::podcast::fetch_episodes_for_program(&api_clone, program_id as u32).await {
+                    Ok((episode_items, program_name)) => {
+                        if let Err(e) = ui_clone.upgrade_in_event_loop(move |ui| {
+                            let episodes_model = Rc::new(VecModel::from(episode_items));
+                            ui.set_episodes(ModelRc::from(episodes_model));
+                            ui.set_selected_program_name(program_name.into());
+                            ui.set_selected_program_id(program_id);
+                            ui.set_show_episodes_view(true);
+                            if $switch_tab {
+                                ui.set_current_tab(1); // Switch to podcasts tab
+                            }
+                        }) {
+                            eprintln!("Failed to update UI with episodes: {:?}", e);
+                        }
+                    }
+                    Err(e) => eprintln!("Failed to fetch episodes: {}", e),
+                }
+            });
+        });
+    }};
+}
+
+/// Macro for starting audio playback with UI updates
+macro_rules! start_playback {
+    ($player:expr, $url:expr, $ui_weak:expr) => {{
+        let player = $player.clone();
+        let ui_weak = $ui_weak.clone();
+        let url = $url;
+
+        async move {
+            match player.start_stream(url).await {
+                Ok(_) => {
+                    let _ = ui_weak.upgrade_in_event_loop(|ui| {
+                        ui.set_is_playing(true);
+                        ui.set_is_loading(false);
+                    });
+                }
+                Err(e) => {
+                    eprintln!("Failed to start stream: {}", e);
+                    let _ = ui_weak.upgrade_in_event_loop(|ui| {
+                        ui.set_is_playing(false);
+                        ui.set_is_loading(false);
+                    });
+                }
+            }
+        }
+    }};
+}
+
+
+/// Helper to fetch program info from schedule for a channel
+async fn fetch_program_info_for_channel(
+    api_client: &SrApiClient,
+    channel_id: i32,
+) -> Option<core::models::ScheduledEpisode> {
+    let api_clone = api_client.clone();
+    tokio::task::spawn_blocking(move || match api_clone.get_schedule_right_now() {
+        Ok(schedule) => schedule
+            .channels
+            .iter()
+            .find(|ch| ch.id == channel_id as u32)
+            .and_then(|ch| ch.current_episode.clone()),
+        Err(e) => {
+            eprintln!("Failed to fetch schedule: {}", e);
+            None
+        }
+    })
+    .await
+    .ok()
+    .flatten()
+}
+
+/// Helper to create ProgramInfo from a ScheduledEpisode
+fn program_info_from_episode(
+    episode: &core::models::ScheduledEpisode,
+    show_image: slint::Image,
+) -> ProgramInfo {
+    let start_time = parse_sr_date_to_time(&episode.start_time_utc);
+    let end_time = parse_sr_date_to_time(&episode.end_time_utc);
+    let program_id = episode.program.as_ref().map(|p| p.id).unwrap_or(0);
+
+    ProgramInfo {
+        title: episode.title.clone().into(),
+        description: episode.description.clone().unwrap_or_default().into(),
+        start_time: start_time.into(),
+        end_time: end_time.into(),
+        show_image,
+        program_id: program_id as i32,
+        has_podcasts: false,
+    }
+}
+
+/// Initialize channels from API and return both channel map and UI model
+fn initialize_channels(
+    channels: &[core::models::Channel],
+) -> (HashMap<i32, String>, ModelRc<ChannelItem>) {
+    // Create HashMap for O(1) channel name lookups
+    let channel_map: HashMap<i32, String> = channels
+        .iter()
+        .filter_map(|ch| i32::try_from(ch.id).ok().map(|id| (id, ch.name.clone())))
+        .collect();
+
+    // Convert to UI model
+    let channel_items: Vec<ChannelItem> = channels
+        .iter()
+        .filter_map(|channel| {
+            i32::try_from(channel.id).ok().map(|id| ChannelItem {
+                id,
+                name: channel.name.clone().into(),
+                stream_url: channel.live_audio.url.clone().into(),
+            })
+        })
+        .collect();
+
+    (channel_map, ModelRc::from(Rc::new(VecModel::from(channel_items))))
+}
+
+/// Refresh program list based on current tab
+fn refresh_program_list(
+    ui: &MainWindow,
+    all_programs: &[core::models::Program],
+    groups_expanded: &HashMap<i32, bool>,
+) {
+    let current_tab = ui.get_current_tab();
+    if current_tab == 2 {
+        // News tab
+        let items = core::podcast::programs_to_items_news(all_programs, groups_expanded);
+        ui.set_news_programs(ModelRc::from(Rc::new(VecModel::from(items))));
+    } else if current_tab == 1 {
+        // Podcasts tab
+        let items = core::podcast::programs_to_items_podcasts(all_programs);
+        ui.set_programs(ModelRc::from(Rc::new(VecModel::from(items))));
+    }
+}
+
 /// Fetch and update program information for a given channel ID
 /// Returns the current program title to detect changes
 async fn update_program_info(
@@ -73,65 +297,37 @@ async fn update_program_info(
     api_client: &SrApiClient,
     channel_id: i32,
 ) -> Option<String> {
-    // Fetch current program information in a blocking task
-    let api_clone = api_client.clone();
-    let program_info =
-        tokio::task::spawn_blocking(move || match api_clone.get_schedule_right_now() {
-            Ok(schedule) => schedule
-                .channels
-                .iter()
-                .find(|ch| ch.id == channel_id as u32)
-                .and_then(|ch| ch.current_episode.clone()),
-            Err(e) => {
-                eprintln!("Failed to fetch schedule: {}", e);
-                None
-            }
+    let episode = fetch_program_info_for_channel(api_client, channel_id).await?;
+    let program_title = episode.title.clone();
+
+    // Download image in background
+    let image_url = episode.social_image.clone().unwrap_or_default();
+    let image_bytes = fetch_image_bytes(image_url).await;
+
+    // Update UI (must create Image inside event loop since Image is not Send)
+    ui_weak
+        .upgrade_in_event_loop(move |ui| {
+            let show_image = image_bytes
+                .and_then(bytes_to_slint_image)
+                .unwrap_or_default();
+            let program_info = program_info_from_episode(&episode, show_image);
+            ui.set_current_program(program_info);
         })
-        .await
-        .ok()
-        .flatten();
+        .ok();
 
-    // Update UI with program information
-    if let Some(episode) = program_info {
-        let program_title = episode.title.clone();
+    Some(program_title)
+}
 
-        // Download image bytes in blocking task
-        let image_url = episode.social_image.clone().unwrap_or_default();
-        let image_bytes = tokio::task::spawn_blocking(move || download_image_bytes(&image_url))
-            .await
-            .ok()
-            .flatten();
-
-        ui_weak
-            .upgrade_in_event_loop(move |ui| {
-                // Format times (convert from /Date(ms)/ format to HH:MM)
-                let start_time = parse_sr_date_to_time(&episode.start_time_utc);
-                let end_time = parse_sr_date_to_time(&episode.end_time_utc);
-
-                // Convert bytes to Slint Image on main thread (Image is not Send)
-                let show_image = image_bytes
-                    .and_then(bytes_to_slint_image)
-                    .unwrap_or_default();
-
-                // Get program ID
-                let program_id = episode.program.as_ref().map(|p| p.id).unwrap_or(0);
-
-                ui.set_current_program(ProgramInfo {
-                    title: episode.title.clone().into(),
-                    description: episode.description.unwrap_or_default().into(),
-                    start_time: start_time.into(),
-                    end_time: end_time.into(),
-                    show_image,
-                    program_id: program_id as i32,
-                    has_podcasts: false,
-                });
-            })
-            .ok();
-
-        Some(program_title)
-    } else {
-        None
+/// Helper to find an episode by ID in a Slint model
+fn find_episode_in_model(episodes: &ModelRc<EpisodeItem>, episode_id: i32) -> Option<EpisodeItem> {
+    for i in 0..episodes.row_count() {
+        if let Some(episode) = episodes.row_data(i) {
+            if episode.id == episode_id {
+                return Some(episode);
+            }
+        }
     }
+    None
 }
 
 // ============================================================================
@@ -188,45 +384,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // STEP 3: FETCH AND DISPLAY CHANNELS
     // ========================================================================
 
+    // Fetch and initialize channels
     println!("Fetching channels from Sveriges Radio API...");
-
-    // Fetch channels from the API
     let channels = api_client.get_channels()?;
-
     println!("Fetched {} channels", channels.len());
 
-    // Create HashMap for O(1) channel name lookups (avoids O(n) search on each selection)
-    // Note: We use i32 keys because Slint only supports 'int' (i32) in .slint files
-    let channel_map: HashMap<i32, String> = channels
-        .iter()
-        .filter_map(|ch| {
-            // Validate channel ID fits in i32 range (very unlikely to fail in practice)
-            i32::try_from(ch.id).ok().map(|id| (id, ch.name.clone()))
-        })
-        .collect();
-
-    // Convert API response to UI model
-    // We need to transform our Rust structs into Slint's ChannelItem struct
-    let channel_items: Vec<ChannelItem> = channels
-        .iter() // Iterate over channels (like for channel in channels)
-        .filter_map(|channel| {
-            // For each channel, create a ChannelItem
-            // Use try_from for safe u32->i32 conversion (Slint limitation)
-            i32::try_from(channel.id).ok().map(|id| ChannelItem {
-                id,
-                name: channel.name.clone().into(),
-                stream_url: channel.live_audio.url.clone().into(),
-            })
-        })
-        .collect(); // Collect into a Vec<ChannelItem>
-
-    // Create a Slint model from the Vec
-    // ModelRc is like a reactive array in Vue or state array in React
-    let channels_model = Rc::new(VecModel::from(channel_items));
-
-    // Set the channels in the UI
-    ui.set_channels(ModelRc::from(channels_model));
-
+    let (channel_map, channels_model) = initialize_channels(&channels);
+    ui.set_channels(channels_model);
     println!("Channels loaded into UI");
 
     // ========================================================================
@@ -271,10 +435,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 *current_id = Some(channel_id);
             }
 
-            let ui = ui_weak.upgrade().unwrap();
+            let Some(ui) = ui_weak.upgrade() else { return };
             ui.set_is_loading(true);
 
-            // Get the channel name using O(1) HashMap lookup
+            // Get channel name using O(1) HashMap lookup
             let channel_name = channel_map_clone
                 .get(&channel_id)
                 .cloned()
@@ -282,92 +446,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             ui.set_current_channel_name(channel_name.into());
 
             let stream_url = stream_url.to_string();
-            let ui_clone = ui_weak.clone();
-            let player_clone = player.clone();
+            let ui_weak_clone = ui_weak.clone();
             let api_clone = api_client_clone.clone();
+            let player_clone = player.clone();
+            let runtime_clone = runtime_handle.clone();
 
-            // M3: Spawn async task for gapless streaming
+            // Spawn async task for program info and gapless streaming
             runtime_handle.spawn(async move {
-                // Fetch current program information in a blocking task
-                let api_clone_for_blocking = api_clone.clone();
-                let program_info = tokio::task::spawn_blocking(move || {
-                    match api_clone_for_blocking.get_schedule_right_now() {
-                        Ok(schedule) => {
-                            // Find the current channel's schedule
-                            // Safe conversion: channel_id is guaranteed valid (came from UI)
-                            schedule
-                                .channels
-                                .iter()
-                                .find(|ch| ch.id == channel_id as u32)
-                                .and_then(|ch| ch.current_episode.clone())
-                        }
-                        Err(e) => {
-                            eprintln!("Failed to fetch schedule: {}", e);
-                            None
-                        }
-                    }
-                })
-                .await
-                .ok()
-                .flatten();
-
-                // Update UI with program information
-                if let Some(episode) = program_info {
-                    // Download image bytes in blocking task
-                    let image_url = episode.social_image.clone().unwrap_or_default();
-                    let image_bytes =
-                        tokio::task::spawn_blocking(move || download_image_bytes(&image_url))
-                            .await
-                            .ok()
-                            .flatten();
-
-                    ui_clone
-                        .upgrade_in_event_loop(move |ui| {
-                            // Format times (convert from /Date(ms)/ format to HH:MM)
-                            let start_time = parse_sr_date_to_time(&episode.start_time_utc);
-                            let end_time = parse_sr_date_to_time(&episode.end_time_utc);
-
-                            // Convert bytes to Slint Image on main thread (Image is not Send)
-                            let show_image = image_bytes
-                                .and_then(bytes_to_slint_image)
-                                .unwrap_or_default();
-
-                            // Get program ID and check if it has podcasts
-                            let program_id = episode.program.as_ref().map(|p| p.id).unwrap_or(0);
-
-                            ui.set_current_program(ProgramInfo {
-                                title: episode.title.clone().into(),
-                                description: episode.description.unwrap_or_default().into(),
-                                start_time: start_time.into(),
-                                end_time: end_time.into(),
-                                show_image,
-                                program_id: program_id as i32,
-                                has_podcasts: false, // We'll check this later if needed
-                            });
-                        })
-                        .ok();
+                // Fetch and display current program information
+                if let Some(episode) = fetch_program_info_for_channel(&api_clone, channel_id).await {
+                    let image_bytes = fetch_image_bytes(episode.social_image.clone().unwrap_or_default()).await;
+                    let _ = ui_weak_clone.upgrade_in_event_loop(move |ui| {
+                        let show_image = image_bytes.and_then(bytes_to_slint_image).unwrap_or_default();
+                        ui.set_current_program(program_info_from_episode(&episode, show_image));
+                    });
                 }
 
-                match player_clone.start_stream(stream_url).await {
-                    Ok(_) => {
-                        println!("Gapless streaming started");
-                        if let Err(e) = ui_clone.upgrade_in_event_loop(|ui| {
-                            ui.set_is_playing(true);
-                            ui.set_is_loading(false);
-                        }) {
-                            eprintln!("Failed to update UI after stream start: {:?}", e);
-                        }
-                    }
-                    Err(e) => {
-                        eprintln!("Failed to start stream: {}", e);
-                        if let Err(e) = ui_clone.upgrade_in_event_loop(|ui| {
-                            ui.set_is_playing(false);
-                            ui.set_is_loading(false);
-                        }) {
-                            eprintln!("Failed to update UI after stream error: {:?}", e);
-                        }
-                    }
-                }
+                runtime_clone.spawn(start_playback!(player_clone, stream_url, ui_weak_clone));
             });
         });
     }
@@ -404,193 +499,51 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     }
 
-    // CALLBACK 3: Podcasts tab clicked - lazy load programs with grouping
-    {
-        let ui_weak = ui.as_weak();
-        let runtime_handle = runtime.handle().clone();
-        let api_client_clone = api_client.clone();
-        let all_programs_clone = all_programs.clone();
-
-        ui.on_podcasts_tab_clicked(move || {
-            let ui = ui_weak.upgrade().unwrap();
-
-            // Check if we have data already loaded
-            let programs_available = {
-                let all_programs_lock = all_programs_clone.lock().unwrap();
-                !all_programs_lock.is_empty()
-            };
-
-            if programs_available {
-                // Filter existing data for Podcasts tab
-                let all_programs_lock = all_programs_clone.lock().unwrap();
-                let program_items = core::podcast::programs_to_items_podcasts(&all_programs_lock);
-                let programs_model = Rc::new(VecModel::from(program_items));
-                ui.set_programs(ModelRc::from(programs_model));
-            } else {
-                // First time loading - fetch data
-                println!("Loading programs with podcasts...");
-
-                let ui_clone = ui_weak.clone();
-                let api_clone = api_client_clone.clone();
-                let all_programs_clone2 = all_programs_clone.clone();
-
-                runtime_handle.spawn(async move {
-                    match core::podcast::fetch_programs_with_podcasts(&api_clone).await {
-                        Ok(programs) => {
-                            // Store programs for future use by all tabs
-                            {
-                                let mut all_programs_lock = all_programs_clone2.lock().unwrap();
-                                *all_programs_lock = programs.clone();
-                            }
-
-                            // Show filtered data for Podcasts tab
-                            if let Err(e) = ui_clone.upgrade_in_event_loop(move |ui| {
-                                let program_items =
-                                    core::podcast::programs_to_items_podcasts(&programs);
-                                let programs_model = Rc::new(VecModel::from(program_items));
-                                ui.set_programs(ModelRc::from(programs_model));
-                                ui.set_programs_loaded(true);
-                            }) {
-                                eprintln!("Failed to update UI with programs: {:?}", e);
-                            }
-                        }
-                        Err(e) => eprintln!("Failed to fetch programs: {}", e),
-                    }
-                });
-            }
-        });
-
-        // News tab callback - reuse the same logic as podcasts but for news filtering
-        let ui_weak_news = ui.as_weak();
-        let api_client_clone_news = api_client.clone();
-        let groups_expanded_clone_news = groups_expanded.clone();
-        let all_programs_clone_news = all_programs.clone();
-        let runtime_handle_news = runtime.handle().clone();
-
-        ui.on_news_tab_clicked(move || {
-            let ui = ui_weak_news.upgrade().unwrap();
-
-            // Check if we have data already loaded
-            let programs_available = {
-                let all_programs_lock = all_programs_clone_news.lock().unwrap();
-                !all_programs_lock.is_empty()
-            };
-
-            if programs_available {
-                // Filter existing data for News tab
-                let all_programs_lock = all_programs_clone_news.lock().unwrap();
-                let groups_expanded_lock = groups_expanded_clone_news.lock().unwrap();
-                let program_items = core::podcast::programs_to_items_news(
-                    &all_programs_lock,
-                    &groups_expanded_lock,
-                );
-                let programs_model = Rc::new(VecModel::from(program_items));
-                ui.set_news_programs(ModelRc::from(programs_model));
-            } else {
-                // First time loading - fetch data
-                println!("Loading programs for news tab...");
-
-                let ui_clone = ui_weak_news.clone();
-                let api_clone = api_client_clone_news.clone();
-                let groups_expanded_clone2 = groups_expanded_clone_news.clone();
-                let all_programs_clone2 = all_programs_clone_news.clone();
-
-                runtime_handle_news.spawn(async move {
-                    match core::podcast::fetch_programs_with_podcasts(&api_clone).await {
-                        Ok(programs) => {
-                            // Store programs for future use by all tabs
-                            {
-                                let mut all_programs_lock = all_programs_clone2.lock().unwrap();
-                                *all_programs_lock = programs.clone();
-                            }
-
-                            // Show filtered data for News tab
-                            if let Err(e) = ui_clone.upgrade_in_event_loop(move |ui| {
-                                let groups_expanded_lock = groups_expanded_clone2.lock().unwrap();
-                                let program_items = core::podcast::programs_to_items_news(
-                                    &programs,
-                                    &groups_expanded_lock,
-                                );
-                                let programs_model = Rc::new(VecModel::from(program_items));
-                                ui.set_news_programs(ModelRc::from(programs_model));
-                                ui.set_news_loaded(true);
-                            }) {
-                                eprintln!("Failed to update UI with programs: {:?}", e);
-                            }
-                        }
-                        Err(e) => eprintln!("Failed to fetch programs: {}", e),
-                    }
-                });
-            }
-        });
+    // CALLBACK 3: Podcasts tab clicked - lazy load programs
+    setup_tab_loader! {
+        ui = ui,
+        runtime = runtime,
+        api_client = api_client,
+        all_programs = all_programs,
+        groups_expanded = groups_expanded,
+        callback = on_podcasts_tab_clicked,
+        filter = |programs, _groups| core::podcast::programs_to_items_podcasts(programs),
+        set_model = |ui: &MainWindow, model| ui.set_programs(model),
+        set_loaded = |ui: &MainWindow| ui.set_programs_loaded(true)
     }
 
-    // CALLBACK 4: Browse podcasts button (M4)
-    {
-        let ui_weak = ui.as_weak();
-        let runtime_handle = runtime.handle().clone();
-        let api_client_clone = api_client.clone();
-
-        ui.on_browse_podcasts_clicked(move |program_id| {
-            println!("Browse podcasts clicked for program ID: {}", program_id);
-
-            let ui_clone = ui_weak.clone();
-            let api_clone = api_client_clone.clone();
-
-            runtime_handle.spawn(async move {
-                match core::podcast::fetch_episodes_for_program(&api_clone, program_id as u32).await
-                {
-                    Ok((episode_items, program_name)) => {
-                        if let Err(e) = ui_clone.upgrade_in_event_loop(move |ui| {
-                            let episodes_model = Rc::new(VecModel::from(episode_items));
-                            ui.set_episodes(ModelRc::from(episodes_model));
-                            ui.set_selected_program_name(program_name.into());
-                            ui.set_current_tab(1); // Switch to podcasts tab
-                            ui.set_show_episodes_view(true);
-                        }) {
-                            eprintln!("Failed to update UI with episodes: {:?}", e);
-                        }
-                    }
-                    Err(e) => eprintln!("Failed to fetch episodes: {}", e),
-                }
-            });
-        });
+    // CALLBACK 3b: News tab clicked - lazy load programs with news filtering
+    setup_tab_loader! {
+        ui = ui,
+        runtime = runtime,
+        api_client = api_client,
+        all_programs = all_programs,
+        groups_expanded = groups_expanded,
+        callback = on_news_tab_clicked,
+        filter = |programs, groups| core::podcast::programs_to_items_news(programs, groups),
+        set_model = |ui: &MainWindow, model| ui.set_news_programs(model),
+        set_loaded = |ui: &MainWindow| ui.set_news_loaded(true)
     }
 
-    // CALLBACK 5: Program selected in podcasts tab (M4)
-    // Fetches and displays episodes for the selected program
-    {
-        let ui_weak = ui.as_weak();
-        let runtime_handle = runtime.handle().clone();
-        let api_client_clone = api_client.clone();
-
-        ui.on_program_selected(move |program_id| {
-            println!("Program selected: ID={}", program_id);
-
-            let ui_clone = ui_weak.clone();
-            let api_clone = api_client_clone.clone();
-
-            runtime_handle.spawn(async move {
-                match core::podcast::fetch_episodes_for_program(&api_clone, program_id as u32).await
-                {
-                    Ok((episode_items, program_name)) => {
-                        if let Err(e) = ui_clone.upgrade_in_event_loop(move |ui| {
-                            let episodes_model = Rc::new(VecModel::from(episode_items));
-                            ui.set_episodes(ModelRc::from(episodes_model));
-                            ui.set_selected_program_name(program_name.into());
-                            ui.set_selected_program_id(program_id);
-                            ui.set_show_episodes_view(true);
-                        }) {
-                            eprintln!("Failed to update UI with episodes: {:?}", e);
-                        }
-                    }
-                    Err(e) => eprintln!("Failed to fetch episodes: {}", e),
-                }
-            });
-        });
+    // CALLBACK 4: Browse podcasts button (from Live tab's program info)
+    setup_episode_fetcher! {
+        ui = ui,
+        runtime = runtime,
+        api_client = api_client,
+        callback = on_browse_podcasts_clicked,
+        switch_tab = true  // Switch to podcasts tab
     }
 
-    // CALLBACK 6: Episode selected for playback (M4)
+    // CALLBACK 5: Program selected in podcasts/news tabs
+    setup_episode_fetcher! {
+        ui = ui,
+        runtime = runtime,
+        api_client = api_client,
+        callback = on_program_selected,
+        switch_tab = false  // Stay on current tab
+    }
+
+    // CALLBACK 6: Episode selected for playback
     {
         let ui_weak = ui.as_weak();
         let player = streaming_player.clone();
@@ -599,121 +552,59 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let current_channel_id_clone = current_channel_id.clone();
 
         ui.on_episode_selected(move |episode_id| {
-            println!("Episode selected: ID={}", episode_id);
-
-            // Clear the current channel ID to stop live program polling
+            // Stop live program polling
             if let Ok(mut current_id) = current_channel_id_clone.lock() {
                 *current_id = None;
             }
 
-            let ui = ui_weak.upgrade().unwrap();
+            let Some(ui) = ui_weak.upgrade() else { return };
             ui.set_is_loading(true);
             ui.set_current_channel_name("Podcast".into());
 
-            // Find the selected episode in the episodes list
-            let episodes = ui.get_episodes();
-            let mut selected_episode: Option<EpisodeItem> = None;
-            for i in 0..episodes.row_count() {
-                if let Some(episode) = episodes.row_data(i) {
-                    if episode.id == episode_id {
-                        selected_episode = Some(episode);
-                        break;
-                    }
-                }
-            }
+            let Some(episode) = find_episode_in_model(&ui.get_episodes(), episode_id) else {
+                eprintln!("Episode {} not found", episode_id);
+                let _ = ui_weak.upgrade_in_event_loop(|ui| ui.set_is_loading(false));
+                return;
+            };
 
-            if let Some(episode) = selected_episode {
-                // Find the program image from cached programs using the selected program ID
-                let current_program_id = ui.get_selected_program_id();
-                let program_image_url = {
-                    let all_programs_lock = all_programs_clone.lock().unwrap();
-                    all_programs_lock
-                        .iter()
-                        .find(|p| p.id as i32 == current_program_id)
-                        .and_then(|p| p.program_image.clone().or(p.social_image.clone()))
-                };
+            // Set episode info (without image initially)
+            ui.set_current_program(ProgramInfo {
+                title: episode.title.clone(),
+                description: episode.description.clone(),
+                start_time: "".into(),
+                end_time: episode.publish_date.clone(),
+                show_image: slint::Image::default(),
+                program_id: 0,
+                has_podcasts: false,
+            });
 
-                // Set episode information in the top UI (initially without image)
-                ui.set_current_program(ProgramInfo {
-                    title: episode.title.clone(),
-                    description: episode.description.clone(),
-                    start_time: "".into(), // Not applicable for podcasts
-                    end_time: episode.publish_date.clone(), // Show publish date instead
-                    show_image: slint::Image::default(), // Will be updated below if image is available
-                    program_id: 0,                       // Not applicable for episodes
-                    has_podcasts: false,
-                });
+            // Load program image in background if available
+            let program_image_url = {
+                let all_programs_lock = all_programs_clone.lock().unwrap();
+                core::podcast::get_program_image_url(&all_programs_lock, ui.get_selected_program_id())
+            };
 
-                let episode_url = episode.url.to_string();
+            if let Some(image_url) = program_image_url {
                 let ui_clone = ui_weak.clone();
-                let player_clone = player.clone();
-
-                // Load program image in background if available
-                if let Some(image_url) = program_image_url {
-                    let ui_clone_for_image = ui_weak.clone();
-                    let episode_title = episode.title.clone();
-                    let episode_description = episode.description.clone();
-                    let episode_date = episode.publish_date.clone();
-
-                    runtime_handle.spawn(async move {
-                        // Download image bytes in blocking task
-                        let image_bytes =
-                            tokio::task::spawn_blocking(move || download_image_bytes(&image_url))
-                                .await
-                                .ok()
-                                .flatten();
-
-                        // Update UI with image on main thread
-                        let _ = ui_clone_for_image.upgrade_in_event_loop(move |ui| {
-                            // Convert bytes to Slint Image on main thread (Image is not Send)
-                            let show_image = image_bytes
-                                .and_then(bytes_to_slint_image)
-                                .unwrap_or_default();
-
-                            ui.set_current_program(ProgramInfo {
-                                title: episode_title,
-                                description: episode_description,
-                                start_time: "".into(),
-                                end_time: episode_date,
-                                show_image,
-                                program_id: 0,
-                                has_podcasts: false,
-                            });
-                        });
-                    });
-                }
+                let title = episode.title.clone();
+                let desc = episode.description.clone();
+                let date = episode.publish_date.clone();
 
                 runtime_handle.spawn(async move {
-                    match player_clone.start_stream(episode_url).await {
-                        Ok(_) => {
-                            println!("Podcast playback started");
-                            if let Err(e) = ui_clone.upgrade_in_event_loop(|ui| {
-                                ui.set_is_playing(true);
-                                ui.set_is_loading(false);
-                            }) {
-                                eprintln!("Failed to update UI after podcast start: {:?}", e);
-                            }
-                        }
-                        Err(e) => {
-                            eprintln!("Failed to start podcast: {}", e);
-                            if let Err(e) = ui_clone.upgrade_in_event_loop(|ui| {
-                                ui.set_is_playing(false);
-                                ui.set_is_loading(false);
-                            }) {
-                                eprintln!("Failed to update UI after podcast error: {:?}", e);
-                            }
-                        }
-                    }
+                    let image_bytes = fetch_image_bytes(image_url).await;
+                    let _ = ui_clone.upgrade_in_event_loop(move |ui| {
+                        let show_image = image_bytes.and_then(bytes_to_slint_image).unwrap_or_default();
+                        ui.set_current_program(ProgramInfo {
+                            title, description: desc, start_time: "".into(), end_time: date,
+                            show_image, program_id: 0, has_podcasts: false,
+                        });
+                    });
                 });
-            } else {
-                eprintln!("Episode with ID {} not found", episode_id);
-                let ui_clone = ui_weak.clone();
-                if let Err(e) = ui_clone.upgrade_in_event_loop(|ui| {
-                    ui.set_is_loading(false);
-                }) {
-                    eprintln!("Failed to update UI after episode not found: {:?}", e);
-                }
             }
+
+            // Start playback
+            let url = episode.url.to_string();
+            runtime_handle.spawn(start_playback!(player, url, ui_weak));
         });
     }
 
@@ -739,40 +630,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ui.on_group_toggled(move |group_id| {
             println!("Group toggled: ID={}", group_id);
 
-            let ui = ui_weak.upgrade().unwrap();
+            let Some(ui) = ui_weak.upgrade() else { return };
 
             // Toggle group expansion state
-            {
-                let mut groups_expanded_lock = groups_expanded_clone.lock().unwrap();
-                let current_state = groups_expanded_lock
-                    .get(&group_id)
-                    .copied()
-                    .unwrap_or(false);
-                groups_expanded_lock.insert(group_id, !current_state);
-            }
+            let mut groups_lock = groups_expanded_clone.lock().unwrap();
+            let current = groups_lock.get(&group_id).copied().unwrap_or(false);
+            groups_lock.insert(group_id, !current);
 
-            // Refresh program list to show/hide children based on current tab
-            {
-                let all_programs_lock = all_programs_clone.lock().unwrap();
-                let groups_expanded_lock = groups_expanded_clone.lock().unwrap();
-                let current_tab = ui.get_current_tab();
-
-                if current_tab == 2 {
-                    // News tab - show only news programs
-                    let program_items = core::podcast::programs_to_items_news(
-                        &all_programs_lock,
-                        &groups_expanded_lock,
-                    );
-                    let programs_model = Rc::new(VecModel::from(program_items));
-                    ui.set_news_programs(ModelRc::from(programs_model));
-                } else if current_tab == 1 {
-                    // Podcasts tab - exclude news programs
-                    let program_items =
-                        core::podcast::programs_to_items_podcasts(&all_programs_lock);
-                    let programs_model = Rc::new(VecModel::from(program_items));
-                    ui.set_programs(ModelRc::from(programs_model));
-                }
-            }
+            // Refresh program list
+            let all_programs_lock = all_programs_clone.lock().unwrap();
+            refresh_program_list(&ui, &all_programs_lock, &groups_lock);
         });
     }
 
