@@ -13,12 +13,33 @@ env:
 
 jobs:
   build-and-release:
-    name: Build and Release macOS App
-    runs-on: macos-latest
+    name: Build and Release
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            artifact_name: SR-Player-macos.zip
+            asset_name: SR-Player-${{ github.ref_name }}-macos.zip
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact_name: sr-player-linux.tar.gz
+            asset_name: sr-player-${{ github.ref_name }}-linux.tar.gz
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact_name: sr-player-windows.zip
+            asset_name: sr-player-${{ github.ref_name }}-windows.zip
 
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
+
+    - name: Install system dependencies (Linux)
+      if: matrix.os == 'ubuntu-latest'
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libasound2-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libxkbcommon-dev libssl-dev libfontconfig1-dev
 
     - name: Install Rust
       uses: dtolnay/rust-toolchain@stable
@@ -34,48 +55,107 @@ jobs:
         restore-keys: |
           ${{ runner.os }}-cargo-release-
 
-    - name: Install cargo-bundle
+    - name: Install cargo-bundle (macOS only)
+      if: matrix.os == 'macos-latest'
       run: cargo install cargo-bundle
 
     - name: Build macOS app bundle
+      if: matrix.os == 'macos-latest'
       run: cargo bundle --release
 
-    - name: Create ZIP
+    - name: Build Linux binary
+      if: matrix.os == 'ubuntu-latest'
+      run: cargo build --release
+
+    - name: Build Windows binary
+      if: matrix.os == 'windows-latest'
+      run: cargo build --release
+
+    - name: Package macOS
+      if: matrix.os == 'macos-latest'
       run: |
         cd target/release/bundle/osx
         zip -r "SR-Player-${{ github.ref_name }}-macos.zip" "SR Player.app"
         mv "SR-Player-${{ github.ref_name }}-macos.zip" ../../../..
 
-    - name: Get app size
+    - name: Package Linux
+      if: matrix.os == 'ubuntu-latest'
       run: |
-        du -sh "target/release/bundle/osx/SR Player.app"
-        ls -lh "SR-Player-${{ github.ref_name }}-macos.zip"
+        mkdir -p package
+        cp target/release/sr-player package/
+        cp README.md package/
+        tar -czf "sr-player-${{ github.ref_name }}-linux.tar.gz" -C package .
 
-    - name: Create Release and Upload Asset
+    - name: Package Windows
+      if: matrix.os == 'windows-latest'
+      shell: bash
+      run: |
+        mkdir -p package
+        cp target/release/sr-player.exe package/
+        cp README.md package/
+        cd package
+        7z a "../sr-player-${{ github.ref_name }}-windows.zip" *
+
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ matrix.os }}-release
+        path: |
+          SR-Player-${{ github.ref_name }}-macos.zip
+          sr-player-${{ github.ref_name }}-linux.tar.gz
+          sr-player-${{ github.ref_name }}-windows.zip
+
+  create-release:
+    name: Create Release
+    needs: build-and-release
+    runs-on: ubuntu-latest
+    steps:
+    - name: Download all artifacts
+      uses: actions/download-artifact@v4
+
+    - name: Create Release and Upload Assets
       uses: softprops/action-gh-release@v2
       with:
         name: SR Player ${{ github.ref_name }}
         body: |
           ## SR Player ${{ github.ref_name }}
 
-          A fast and lightweight macOS desktop app for streaming Sveriges Radio live channels.
+          A fast and lightweight desktop app for streaming Sveriges Radio live channels and podcasts.
 
           ### Features
           - Stream all Sveriges Radio live channels
+          - Browse and play podcast episodes
           - Gapless audio playback with Symphonia decoder
-          - Real-time "Now Playing" information
-          - Native macOS .app bundle (~5MB)
+          - Real-time "Now Playing" information with program details
+          - Cross-platform support (macOS, Linux, Windows)
 
           ### Installation
+
+          #### macOS
           1. Download `SR-Player-${{ github.ref_name }}-macos.zip`
           2. Unzip the file
           3. Drag `SR Player.app` to your Applications folder
           4. Right-click and select "Open" (first time only, due to macOS Gatekeeper)
 
-          ### What's Changed
-          - Initial release with gapless streaming
+          #### Linux
+          1. Download `sr-player-${{ github.ref_name }}-linux.tar.gz`
+          2. Extract: `tar -xzf sr-player-${{ github.ref_name }}-linux.tar.gz`
+          3. Run: `./sr-player`
+          4. Required dependencies: `libasound2`, `libxcb`, `libfontconfig`
+
+          #### Windows
+          1. Download `sr-player-${{ github.ref_name }}-windows.zip`
+          2. Extract the ZIP file
+          3. Run `sr-player.exe`
+
+          ### What's Changed in Milestone 4
+          - Podcast browsing and playback
+          - Cross-platform builds for macOS, Linux, and Windows
+          - Gapless streaming for both live and podcast content
           - Full Sveriges Radio API integration
-          - Optimized binary size (~5MB)
-        files: SR-Player-${{ github.ref_name }}-macos.zip
+        files: |
+          **/SR-Player-${{ github.ref_name }}-macos.zip
+          **/sr-player-${{ github.ref_name }}-linux.tar.gz
+          **/sr-player-${{ github.ref_name }}-windows.zip
         draft: false
         prerelease: false
