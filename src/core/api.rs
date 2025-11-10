@@ -1,11 +1,19 @@
 // This module handles all communication with the Sveriges Radio API
 // https://www.sverigesradio.se/oppetapi
-// We use the 'reqwest' library to make HTTP requests and 'anyhow' for error handling.
+//
+// This module handles all HTTP communication with the SR API endpoints.
+// We use:
+// - reqwest: For making HTTP requests (blocking client for simplicity)
+// - anyhow: For ergonomic error handling with context
+// - serde: For JSON deserialization into our model structs
 
 use anyhow::{Context, Result};
 use log::{debug, info};
 
-use crate::core::models::{Channel, ChannelsResponse, ScheduleRightNowResponse};
+use crate::core::models::{
+    Channel, ChannelsResponse, EpisodesResponse, PodFile, Program, ProgramsResponse,
+    ScheduleRightNowResponse,
+};
 
 // Base URL for all Sveriges Radio API endpoints
 const SR_API_BASE: &str = "https://api.sr.se/api/v2";
@@ -16,8 +24,8 @@ const SR_API_BASE: &str = "https://api.sr.se/api/v2";
 
 /// The main API client that handles all requests to Sveriges Radio
 ///
-/// In Rust, we use a struct to group related data and functionality.
-/// This client uses reqwest's blocking client, which means it will wait for the HTTP request to complete before continuing (simpler for beginners).
+/// Uses a blocking HTTP client for simplicity. All methods are synchronous and should
+/// be called from within tokio::task::spawn_blocking when used in async contexts.
 #[derive(Clone)]
 pub struct SrApiClient {
     client: reqwest::blocking::Client, // The HTTP client that makes requests
@@ -127,6 +135,123 @@ impl SrApiClient {
         );
 
         Ok(schedule_response)
+    }
+
+    /// Fetches all programs with podcasts available
+    ///
+    /// Returns a Vec of Program structs filtered to only include those with podcasts
+    ///
+    /// Example:
+    /// ```
+    /// let programs = client.get_programs_with_podcasts()?;
+    /// for program in programs {
+    ///     println!("Program: {} (ID: {})", program.name, program.id);
+    /// }
+    /// ```
+    pub fn get_programs_with_podcasts(&self) -> Result<Vec<Program>> {
+        // Fetch all programs without pagination (all results at once)
+        // We'll filter for has_pod=true after fetching
+        let url = format!("{}/programs?format=json&pagination=false", SR_API_BASE);
+
+        debug!("Fetching programs from: {}", url);
+
+        let response = self
+            .client
+            .get(&url)
+            .send()
+            .context("Failed to fetch programs")?;
+
+        let programs_response: ProgramsResponse = response
+            .json()
+            .context("Failed to parse programs JSON response")?;
+
+        // Filter to only include programs that have podcasts and are not archived
+        let podcast_programs: Vec<Program> = programs_response
+            .programs
+            .into_iter()
+            .filter(|p| p.has_pod && !p.archived)
+            .collect();
+
+        info!(
+            "Successfully fetched {} programs with podcasts",
+            podcast_programs.len()
+        );
+
+        Ok(podcast_programs)
+    }
+
+    /// Fetches the 25 most recent podcast episodes for a specific program
+    ///
+    /// Uses the episodes/index endpoint (not podfiles) which supports reliable server-side sorting.
+    /// Episodes are sorted by publish date (newest first) and limited to 25 results.
+    ///
+    /// Returns a Vec of PodFile structs (converted from Episode objects)
+    ///
+    /// Example:
+    /// ```
+    /// let episodes = client.get_podcast_episodes(4916)?;
+    /// for episode in episodes {
+    ///     println!("Episode: {} - Duration: {}s", episode.title, episode.duration);
+    /// }
+    /// ```
+    pub fn get_podcast_episodes(&self, program_id: u32) -> Result<Vec<PodFile>> {
+        // Use episodes/index endpoint for reliable server-side sorting
+        // sort=publishdateutc%2Bdesc (%2B = URL-encoded '+') gives newest episodes first
+        let url = format!(
+            "{}/episodes/index?programid={}&format=json&pagination=true&page=1&size=25&sort=publishdateutc%2Bdesc",
+            SR_API_BASE, program_id
+        );
+
+        debug!("Fetching podcast episodes from: {}", url);
+
+        let response = self
+            .client
+            .get(&url)
+            .send()
+            .context(format!(
+                "Failed to fetch podcast episodes for program {}",
+                program_id
+            ))?;
+
+        let episodes_response: EpisodesResponse = response
+            .json()
+            .context("Failed to parse podcast episodes JSON response")?;
+
+        info!(
+            "Fetched {} podcast episodes for program {} (server-side sorted)",
+            episodes_response.episodes.len(),
+            program_id
+        );
+
+        // Convert Episode objects to PodFile format
+        // Episodes have a listen_podfile field that contains the audio file info
+        let podfiles: Vec<PodFile> = episodes_response
+            .episodes
+            .into_iter()
+            .filter_map(|episode| {
+                // Only include episodes that have an actual podcast file
+                episode.listen_podfile.map(|podfile| {
+                    let publish_date = podfile.publish_date_utc.clone();
+                    PodFile {
+                        id: episode.id,
+                        title: episode.title,
+                        description: episode.description,
+                        url: podfile.url,
+                        file_size_in_bytes: podfile.file_size_in_bytes,
+                        duration: podfile.duration,
+                        publish_date_utc: podfile.publish_date_utc,
+                        available_from_utc: publish_date, // Same as publish date for episodes
+                        program: crate::core::models::ProgramInfo {
+                            id: program_id,
+                            name: None,
+                        },
+                        stat_key: None,
+                    }
+                })
+            })
+            .collect();
+
+        Ok(podfiles)
     }
 }
 
