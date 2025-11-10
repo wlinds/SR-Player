@@ -13,8 +13,6 @@ use crate::core::api::SrApiClient;
 use crate::core::models::{Episode, Program};
 use crate::{EpisodeItem, ProgramItem};
 
-/// Parse SR API date format /Date(milliseconds)/ and convert to a readable format
-/// Example: "/Date(1762431000000)/" -> "11 Aug 2020"
 fn parse_sr_date_to_display(date_str: &str) -> String {
     use chrono::DateTime;
 
@@ -251,4 +249,15 @@ pub async fn fetch_episodes_for_program(
     let program_name = String::from("Podcast Episodes");
 
     Ok((episode_items, program_name))
+}
+
+/// Get program image URL from cached programs
+pub fn get_program_image_url(
+    all_programs: &[crate::core::models::Program],
+    program_id: i32,
+) -> Option<String> {
+    all_programs
+        .iter()
+        .find(|p| p.id as i32 == program_id)
+        .and_then(|p| p.program_image.clone().or(p.social_image.clone()))
 }
