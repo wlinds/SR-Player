@@ -168,6 +168,7 @@ export component MainWindow inherits Window {
                     podcasts-tab-clicked();
                 } else if (tab-id == 2) {
                     // News tab
+                    show-episodes-view = false;
                     news-tab-clicked();
                 }
                 // For Live (0) and Music (3), just switching the tab is enough
