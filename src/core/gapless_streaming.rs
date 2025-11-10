@@ -507,7 +507,7 @@ impl GaplessPlayer {
             let mut bytes_downloaded = 0;
             let start_time = Instant::now();
             let mut initial_buffer = Vec::new();
-            const INITIAL_BUFFER_SIZE: usize = 32_768; // 32KB initial buffer
+            const INITIAL_BUFFER_SIZE: usize = 8_192; // 8KB initial buffer
 
             // Buffer initial chunks before starting decoder
             // This prevents "EOF at 0 bytes" errors and ensures smooth startup
