@@ -55,22 +55,24 @@ export component NowPlaying inherits Rectangle {
             }
 
             // Program text details
-            VerticalBox {
-                spacing: 6px;
-
+            Rectangle {
                 // Program title
                 Text {
                     text: current-program.title;
                     font-size: 16px;
                     font-weight: 600;
                     color: #e0e0e0;
+                    x: 0px;
+                    y: 0px;
                 }
 
                 // Time range (e.g., "09:00 - 12:00")
                 if current-program.start-time != "": Text {
                     text: current-program.start-time + " - " + current-program.end-time;
-                    font-size: 13px;
+                    font-size: 12px;
                     color: #aaaaaa;
+                    x: 0px;
+                    y: 18px;
                 }
 
                 // Program description (truncated if too long)
@@ -78,9 +80,12 @@ export component NowPlaying inherits Rectangle {
                     text: current-program.description;
                     font-size: 12px;
                     color: #999999;
-                    wrap: word-wrap;      // Allow text to wrap to multiple lines
-                    overflow: elide;      // Add "..." if text is too long
-                    max-height: 40px;     // Limit to ~3 lines of text
+                    wrap: word-wrap;
+                    overflow: elide;
+                    x: 0px;
+                    y: 36px;
+                    width: parent.width;
+                    max-height: 40px;
                 }
             }
         }
