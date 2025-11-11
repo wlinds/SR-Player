@@ -1,7 +1,5 @@
 // NowPlaying Component - Displays currently playing channel and program information
 // This component shows:
-// - The current channel name
-// - Playing/stopped/loading status
 // - Current program details (when available)
 // - Program image, title, time, and description
 
@@ -30,60 +28,30 @@ export component NowPlaying inherits Rectangle {
     // Called when user clicks "Browse Podcasts" button for current program
     callback browse-podcasts-clicked(int);  // Parameters: (program_id)
 
-    // Called when user clicks "Stop" button
-    callback stop-clicked();
-
     // ================================================================
     // VISUAL STYLING
     // ================================================================
     background: #2a2a2a;
-    border-radius: 8px;
-    min-height: 180px;
+    min-height: 0px;
 
     // ================================================================
     // LAYOUT
     // ================================================================
     VerticalBox {
-        padding: 16px;
+        padding: 8px;
         spacing: 8px;
-
-        // Section title
-        Text {
-            text: "Now Playing";
-            font-size: 14px;
-            color: #888888;
-        }
-
-        // Channel name (main text)
-        Text {
-            text: current-channel-name;
-            font-size: 18px;
-            font-weight: 600;
-            color: #ffffff;
-        }
-
-        // Status indicator - shows different states:
-        // - "Loading..." when buffering
-        // - "▶ Playing..." when active
-        // - "⏸ Stopped" when inactive
-        Text {
-            text: is-loading ? "Loading..." :
-                  is-playing ? "▶ Playing..." : "⏸ Stopped";
-            font-size: 14px;
-            color: is-playing ? #4CAF50 : #888888;  // Green when playing, gray otherwise
-        }
 
         // Program information section (only visible when program data exists)
         if current-program.title != "": HorizontalBox {
-            spacing: 12px;
+            spacing: 8px;
             padding-top: 8px;
 
             // Program image/thumbnail
             Image {
                 source: current-program.show-image;
-                width: 80px;
-                height: 80px;
-                image-fit: cover;  // Ensures image fills the space without distortion
+                width: 140px;
+                height: 140px;
+                image-fit: cover;
             }
 
             // Program text details
