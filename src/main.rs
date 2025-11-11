@@ -727,7 +727,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         all_programs = all_programs,
         groups_expanded = groups_expanded,
         callback = on_news_tab_clicked,
-        filter = |programs, groups| core::podcast::programs_to_items_news(programs, groups),
+        filter = core::podcast::programs_to_items_news,
         set_model = |ui: &MainWindow, model| ui.set_news_programs(model),
         set_loaded = |ui: &MainWindow| ui.set_news_loaded(true)
     }
