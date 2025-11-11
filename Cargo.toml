@@ -7,15 +7,17 @@ edition = "2021"
 slint = "1.9"
 # Rodio for audio output (sink/device management)
 # Keep symphonia-aac for M2 StreamingPlayer, add direct symphonia for M3
-rodio = { version = "0.19", features = ["symphonia-aac"] }
+rodio = { version = "0.19", features = ["symphonia-aac", "minimp3"] }
 # Symphonia for direct AAC decoding (custom Source implementation for M3)
 # We use symphonia directly for gapless streaming
 symphonia = { version = "0.5", features = ["aac", "mp3"] }
+minimp3 = "0.5"
 reqwest = { version = "0.12", features = ["blocking", "json", "stream"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tokio = { version = "1", features = ["full"] }
 bytes = "1.5"
+futures-util = "0.3"
 anyhow = "1.0"
 env_logger = "0.11"
 log = "0.4"
