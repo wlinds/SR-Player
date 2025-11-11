@@ -7,18 +7,19 @@
 A super fast and lightweight cross-platform desktop app for streaming Sveriges Radio live channels and podcasts, built with Rust, Slint, Symphonia and Rodio.
 
 
-![alt text](images/sr-player-025-11-04.png)
+![alt text](images/sr-player-v0.5.0-25-11-11.png)
 
 ## Features
 
 ### Live Radio
 - Stream all Sveriges Radio live channels
 - Gapless and super fast audio playback
-- Real-time "Now Playing" information
+- Real-time "Now Playing" information with playback progess tracking
 - Quick channel browsing
 
 ### Podcasts
 - Browse and listen to programs and podcasts
+- Hybrid streaming and caching for optimal performance
 
 ### Cross-Platform
 - Native macOS .app bundle (~5MB)
@@ -147,6 +148,13 @@ panic = "abort"       # Remove unwinding machinery
 - Dedicated audio thread for thread-safe non-Send types
 - Async HTTP streaming with tokio
 - Eliminates gaps between audio chunks
+
+**Episode Playback:**
+- HybridPlayer for intelligent streaming and caching
+- FilePlayer with minimp3 decoder for seekable local playback
+- Background downloading with progress tracking
+- Send-safe wrappers for cross-thread communication
+- Automatic cache management
 
 **UI Framework:**
 - Slint 1.9 for native cross-platform UI
