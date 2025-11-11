@@ -105,7 +105,8 @@ impl SendSafeGaplessPlayer {
         response_rx.await?
     }
 
-    // Stop streaming
+    // Stop streaming (only used internally for cleanup)
+    #[allow(dead_code)]
     pub async fn stop(&self) {
         let (response_tx, response_rx) = oneshot::channel();
         let _ = self.command_tx.send(AudioCommand::Stop {
@@ -115,19 +116,16 @@ impl SendSafeGaplessPlayer {
     }
 
     // Pause playback
-    #[allow(dead_code)] // Reserved for future UI pause button
     pub fn pause(&self) {
         let _ = self.command_tx.send(AudioCommand::Pause);
     }
 
     // Resume playback
-    #[allow(dead_code)] // Reserved for future UI resume button
     pub fn resume(&self) {
         let _ = self.command_tx.send(AudioCommand::Resume);
     }
 
     // Set volume (0.0 to 1.0)
-    #[allow(dead_code)] // Reserved for future UI volume slider
     pub fn set_volume(&self, volume: f32) {
         let _ = self.command_tx.send(AudioCommand::SetVolume(volume));
     }

@@ -211,38 +211,6 @@ pub struct ProgramCategory {
 }
 
 // ============================================================================
-// PODCAST FILES API MODELS
-// ============================================================================
-
-// Represents a single podcast episode
-// Note: We now fetch episodes using the episodes/index endpoint (see EpisodesResponse below),
-// but convert them to PodFile format for backward compatibility with the rest of the codebase.
-// TODO: Simplify
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PodFile {
-    pub id: u32,
-    pub title: String,
-    pub description: Option<String>,
-    pub url: String, // THE IMPORTANT ONE: URL to the MP3 file
-
-    #[serde(rename = "filesizeinbytes")]
-    pub file_size_in_bytes: u64, // Size of the podcast file
-
-    pub duration: u32, // Duration in seconds
-
-    #[serde(rename = "publishdateutc")]
-    pub publish_date_utc: String, // Publish date in /Date(ms)/ format
-
-    #[serde(rename = "availablefromutc")]
-    pub available_from_utc: String, // When the episode became available
-
-    pub program: ProgramInfo, // Associated program info
-
-    #[serde(rename = "statkey")]
-    pub stat_key: Option<String>,
-}
-
-// ============================================================================
 // EPISODES API MODELS
 // ============================================================================
 

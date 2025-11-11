@@ -1,9 +1,4 @@
 // Utility functions for image processing and date parsing
-//
-// This module provides helper functions for:
-// - Downloading images from URLs
-// - Converting image bytes to Slint Image format
-// - Parsing Sveriges Radio's date format
 
 use chrono::{DateTime, Utc};
 use chrono_tz::Europe::Stockholm;
@@ -61,4 +56,14 @@ pub fn bytes_to_slint_image(bytes: Vec<u8>) -> Option<Image> {
             None
         }
     }
+}
+
+pub async fn fetch_image_bytes(url: String) -> Option<Vec<u8>> {
+    if url.is_empty() {
+        return None;
+    }
+    tokio::task::spawn_blocking(move || download_image_bytes(&url))
+        .await
+        .ok()
+        .flatten()
 }
