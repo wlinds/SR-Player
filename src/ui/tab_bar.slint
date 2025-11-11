@@ -36,7 +36,7 @@ export component TabBar inherits Rectangle {
     in property <color> active-background: #3a3a3a;
     in property <color> inactive-background: #2a2a2a;
     in property <color> text-color: #ffffff;
-    in property <int> tab-height: 60;
+    in property <int> tab-height: 30;
 
     // ================================================================
     // CALLBACKS
@@ -50,9 +50,12 @@ export component TabBar inherits Rectangle {
     // ================================================================
 
     height: tab-height * 1px;
+    x: 0px;
+    width: 100%;
 
     HorizontalBox {
         spacing: 0px;
+        padding: 0px;
 
         // Generate tabs dynamically from the tabs array
         for tab[index] in tabs: Rectangle {
