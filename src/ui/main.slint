@@ -19,7 +19,7 @@
 
 // Import standard widgets from Slint's widget library
 // Like: import { Button } from 'react' or from tkinter import Button
-import { Button, VerticalBox, HorizontalBox, ListView, ScrollView } from "std-widgets.slint";
+import { Button, VerticalBox, HorizontalBox, ListView, ScrollView, Slider } from "std-widgets.slint";
 
 
 import { ChannelItem, ProgramInfo, ProgramItem, EpisodeItem } from "types.slint";
@@ -45,6 +45,23 @@ export component MainWindow inherits Window {
     background: #1a1a1a;
 
     // ================================================================
+    // TIMER FOR PROGRESS UPDATES
+    // ================================================================
+    // Update playback position every second when playing (for both episodes and live radio)
+    Timer {
+        interval: 1s;
+        running: is-playing && (playback-duration > 0 || current-program.start-time != "");
+        triggered => {
+            // For episodes: check against playback-duration
+            // For live radio: check against program-duration
+            if ((playback-duration > 0 && playback-position < playback-duration) ||
+                (playback-duration == 0 && playback-position < program-duration)) {
+                playback-position += 1.0;
+            }
+        }
+    }
+
+    // ================================================================
     // APPLICATION STATE
     // ================================================================
 
@@ -52,6 +69,11 @@ export component MainWindow inherits Window {
     in-out property <string> current-channel-name: "No channel selected";
     in-out property <bool> is-playing: false;
     in-out property <bool> is-loading: false;
+    in-out property <float> volume: 0.5;                // Volume level 0.0 to 1.0
+    in-out property <float> playback-position: 0.0;     // Current position in seconds
+    in-out property <float> playback-duration: 0.0;     // Total duration in seconds (episodes)
+    in-out property <float> program-duration: 0.0;      // Total duration in seconds (live radio programs)
+    in-out property <string> download-status: "";       // Download status message
     in-out property <ProgramInfo> current-program: {
         title: "",
         description: "",
@@ -86,7 +108,10 @@ export component MainWindow inherits Window {
     callback channel-selected(int, string);  // (channel_id, stream_url)
 
     // Playback controls
-    callback stop-clicked();
+    callback play-pause-clicked();
+    callback volume-changed(float);     // (volume 0.0 to 1.0)
+    callback seek-to-position(float);   // (position in seconds)
+    callback update-live-position();    // Update live radio progress
 
     // Program browsing
     callback browse-podcasts-clicked(int);  // (program_id)
@@ -108,8 +133,8 @@ export component MainWindow inherits Window {
     // MAIN LAYOUT
     // ================================================================
     VerticalBox {
-        padding: 16px;
-        spacing: 12px;
+        padding: 0px;
+        spacing: 0px;
 
         // ================================================================
         // NOW PLAYING SECTION
@@ -123,33 +148,228 @@ export component MainWindow inherits Window {
             browse-podcasts-clicked(program-id) => {
                 root.browse-podcasts-clicked(program-id);
             }
-
-            stop-clicked => {
-                root.stop-clicked();
-            }
         }
 
         // ================================================================
-        // PLAYBACK CONTROLS
+        // PLAYBACK CONTROLS (Full width, right below Now Playing)
         // ================================================================
-        HorizontalBox {
-            spacing: 8px;
-            alignment: center;
+        VerticalBox {
+            spacing: 0px;
+            padding: 0px;
 
-            // Stop button (only enabled when playing)
-            Button {
-                text: "Stop";
-                enabled: is-playing && !is-loading;
-                clicked => {
-                    stop-clicked();
+            // Progress bar (shown for episodes OR live radio with program info, even when paused)
+            if playback-duration > 0 || current-program.start-time != "": VerticalBox {
+                spacing: 0px;
+                padding: 0px;
+                vertical-stretch: 0;
+
+                // Progress bar background
+                Rectangle {
+                    height: 4px;
+                    background: #1a1a1a;
+                    border-radius: 0px;
+
+                    // Filled portion (anchored to left)
+                    Rectangle {
+                        x: 0px;
+                        y: 0px;
+                        width: {
+                            if (playback-duration > 0) {
+                                // Episode: position / duration
+                                parent.width * (playback-position / playback-duration)
+                            } else if (program-duration > 0) {
+                                // Live radio: position / program duration
+                                parent.width * (playback-position / program-duration)
+                            } else {
+                                // No duration info, show nothing
+                                0px
+                            }
+                        };
+                        height: parent.height;
+                        background: #EFA669;
+                        border-radius: 0px;
+                    }
+
+                    // Touch area for seeking (only for episodes with duration > 0)
+                    if playback-duration > 0: TouchArea {
+                        width: 100%;
+                        height: 100%;
+                        mouse-cursor: pointer;
+
+                        clicked => {
+                            root.playback-position = (self.mouse-x / self.width) * playback-duration;
+                            root.seek-to-position(root.playback-position);
+                        }
+                    }
+                }
+
+                // Time labels
+                HorizontalBox {
+                    padding-left: 8px;
+                    padding-right: 8px;
+                    padding-top: 4px;
+
+                    // Left time (episode position or live radio current position)
+                    Text {
+                        text: {
+                            playback-duration > 0 ?
+                                // Episode: show position as mm:ss
+                                (Math.floor(playback-position / 60) + ":" +
+                                (Math.floor(Math.mod(playback-position, 60)) < 10 ? "0" : "") +
+                                Math.floor(Math.mod(playback-position, 60))) :
+                                // Live radio: show current position as mm:ss
+                                (Math.floor(playback-position / 60) + ":" +
+                                (Math.floor(Math.mod(playback-position, 60)) < 10 ? "0" : "") +
+                                Math.floor(Math.mod(playback-position, 60)))
+                        };
+                        color: #888888;
+                        font-size: 11px;
+                    }
+
+                    // Spacer
+                    Rectangle {
+                        horizontal-stretch: 1;
+                    }
+
+                    // Right time (episode remaining or live radio remaining)
+                    Text {
+                        text: {
+                            playback-duration > 0 ?
+                                // Episode: show remaining time
+                                ("-" + Math.floor((playback-duration - playback-position) / 60) + ":" +
+                                (Math.floor(Math.mod(playback-duration - playback-position, 60)) < 10 ? "0" : "") +
+                                Math.floor(Math.mod(playback-duration - playback-position, 60))) :
+                                // Live radio: show remaining time
+                                (program-duration > 0 ?
+                                    ("-" + Math.floor((program-duration - playback-position) / 60) + ":" +
+                                    (Math.floor(Math.mod(program-duration - playback-position, 60)) < 10 ? "0" : "") +
+                                    Math.floor(Math.mod(program-duration - playback-position, 60))) :
+                                    current-program.end-time)
+                        };
+                        color: #888888;
+                        font-size: 11px;
+                    }
+                }
+
+                // Download status
+                if download-status != "": HorizontalBox {
+                    padding-left: 8px;
+                    padding-right: 8px;
+                    padding-top: 0px;
+                    padding-bottom: 2px;
+                    alignment: center;
+
+                    Text {
+                        text: download-status;
+                        color: #4CAF50;
+                        font-size: 10px;
+                    }
+                }
+            }
+
+            // Playback controls and volume
+            HorizontalBox {
+                spacing: 8px;
+                padding-left: 8px;
+                padding-right: 8px;
+                padding-top: (playback-duration > 0 || current-program.start-time != "") ? 0px : 8px;
+
+                // Play/Pause button
+                Rectangle {
+                    width: 40px;
+                    height: 40px;
+                    background: !is-loading ? #3a3a3a : #2a2a2a;
+                    border-radius: 20px;
+
+                    Image {
+                        source: is-playing ? @image-url("../assets/icons/pause.svg") : @image-url("../assets/icons/play.svg");
+                        width: 24px;
+                        height: 24px;
+                        x: (parent.width - self.width) / 2;
+                        y: (parent.height - self.height) / 2;
+                        colorize: #ffffff;
+                    }
+
+                    TouchArea {
+                        clicked => {
+                            if (!is-loading) {
+                                play-pause-clicked();
+                            }
+                        }
+                        mouse-cursor: !is-loading ? pointer : default;
+                    }
+                }
+
+                // Volume controls (takes remaining space)
+                HorizontalLayout {
+                    spacing: 8px;
+
+                    // Volume label
+                    Text {
+                        text: "Vol:";
+                        color: #666666;
+                        vertical-alignment: center;
+                        font-size: 14px;
+                    }
+
+                    // Volume slider with subtle grey accent
+                    Rectangle {
+                        horizontal-stretch: 1;
+                        height: 4px;
+                        background: #2a2a2a;
+                        border-radius: 2px;
+
+                        // Filled portion (anchored to left)
+                        Rectangle {
+                            x: 0px;
+                            y: 0px;
+                            width: parent.width * root.volume;
+                            height: parent.height;
+                            background: #666666;
+                            border-radius: 2px;
+                        }
+
+                        // Touch area for interaction
+                        TouchArea {
+                            width: parent.width;
+                            height: parent.height;
+
+                            clicked => {
+                                root.volume = self.mouse-x / self.width;
+                                root.volume-changed(root.volume * root.volume);
+                            }
+
+                            moved => {
+                                if (self.pressed) {
+                                    root.volume = clamp(self.mouse-x / self.width, 0, 1);
+                                    root.volume-changed(root.volume * root.volume);
+                                }
+                            }
+                        }
+                    }
+
+                    // Volume percentage
+                    Text {
+                        text: Math.round(root.volume * root.volume * 100) + "%";
+                        color: #666666;
+                        vertical-alignment: center;
+                        min-width: 35px;
+                        font-size: 14px;
+                    }
                 }
             }
 
             // Browse Podcasts button (only shown when current program has podcasts)
-            if current-program.has-podcasts && current-program.program-id > 0: Button {
-                text: "Browse Podcasts";
-                clicked => {
-                    browse-podcasts-clicked(current-program.program-id);
+            if current-program.has-podcasts && current-program.program-id > 0: HorizontalBox {
+                alignment: center;
+                padding-left: 8px;
+                padding-right: 8px;
+
+                Button {
+                    text: "Browse Podcasts";
+                    clicked => {
+                        browse-podcasts-clicked(current-program.program-id);
+                    }
                 }
             }
         }
@@ -157,30 +377,35 @@ export component MainWindow inherits Window {
         // ================================================================
         // TAB NAVIGATION
         // ================================================================
-        TabBar {
-            current-tab <=> root.current-tab;  // Two-way binding
+        VerticalBox {
+            spacing: 4px;
+            padding: 0px;
+            padding-top: 8px;
 
-            tab-clicked(tab-id) => {
-                // Handle special logic for specific tabs
-                if (tab-id == 1) {
-                    // Podcasts tab
-                    show-episodes-view = false;
-                    podcasts-tab-clicked();
-                } else if (tab-id == 2) {
-                    // News tab
-                    show-episodes-view = false;
-                    news-tab-clicked();
+            TabBar {
+                current-tab <=> root.current-tab;  // Two-way binding
+
+                tab-clicked(tab-id) => {
+                    // Handle special logic for specific tabs
+                    if (tab-id == 1) {
+                        // Podcasts tab
+                        show-episodes-view = false;
+                        podcasts-tab-clicked();
+                    } else if (tab-id == 2) {
+                        // News tab
+                        show-episodes-view = false;
+                        news-tab-clicked();
+                    }
+                    // For Live (0) and Music (3), just switching the tab is enough
                 }
-                // For Live (0) and Music (3), just switching the tab is enough
             }
-        }
 
-        // ================================================================
-        // TAB CONTENT AREA
-        // ================================================================
+            // ================================================================
+            // TAB CONTENT AREA
+            // ================================================================
 
-        // Live Tab - Channel list
-        if current-tab == 0: TabContent {
+            // Live Tab - Channel list
+            if current-tab == 0: TabContent {
             is-channels-tab: true;
             channels: root.channels;
             is-loaded: true;
@@ -258,12 +483,13 @@ export component MainWindow inherits Window {
             }
         }
 
-        // Music Tab - Placeholder using TabContent
-        if current-tab == 3: TabContent {
-            show-simple-text: true;
-            simple-text: "Music content coming soon...";
-            simple-text-color: #888888;
-            is-loaded: true;
+            // Music Tab - Placeholder using TabContent
+            if current-tab == 3: TabContent {
+                show-simple-text: true;
+                simple-text: "Music content coming soon...";
+                simple-text-color: #888888;
+                is-loaded: true;
+            }
         }
     }
 }
