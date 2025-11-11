@@ -586,7 +586,7 @@ impl GaplessPlayer {
 
             // Wait for first chunk to arrive before creating Symphonia source
             // This ensures we have data to probe when Symphonia initializes
-            match data_rx.recv_timeout(Duration::from_secs(1)) {
+            match data_rx.recv_timeout(Duration::from_secs(3)) {
                 Ok(first_chunk) => {
                     info!(
                         "Received first chunk ({} bytes), creating decoder...",
