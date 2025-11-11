@@ -32,6 +32,8 @@ mod core; // This loads src/core/mod.rs
 // Like: from core.api import SrApiClient in Python
 // Or: import { SrApiClient } from './core/api' in JavaScript
 use core::api::SrApiClient;
+use core::episode_cache::EpisodeCache;
+use core::file_player_send_safe::SendSafeFilePlayer;
 use core::gapless_send_safe::SendSafeGaplessPlayer; // M3: Send-safe gapless streaming!
 use core::utils::{bytes_to_slint_image, fetch_image_bytes, parse_sr_date_to_time};
 
@@ -52,20 +54,6 @@ slint::include_modules!();
 // ============================================================================
 // HELPER FUNCTIONS
 // ============================================================================
-
-/// Create an empty ProgramInfo struct (helper to avoid duplication)
-fn empty_program_info() -> ProgramInfo {
-    ProgramInfo {
-        title: "".into(),
-        description: "".into(),
-        start_time: "".into(),
-        end_time: "".into(),
-        show_image: slint::Image::default(),
-        program_id: 0,
-        has_podcasts: false,
-    }
-}
-
 /// Macro to reduce duplication in tab loading callbacks
 /// Handles lazy loading of programs with caching
 macro_rules! setup_tab_loader {
@@ -155,7 +143,8 @@ macro_rules! setup_episode_fetcher {
             let api_clone = api_client_clone.clone();
 
             runtime_handle.spawn(async move {
-                match core::podcast::fetch_episodes_for_program(&api_clone, program_id as u32).await {
+                match core::podcast::fetch_episodes_for_program(&api_clone, program_id as u32).await
+                {
                     Ok((episode_items, program_name)) => {
                         if let Err(e) = ui_clone.upgrade_in_event_loop(move |ui| {
                             let episodes_model = Rc::new(VecModel::from(episode_items));
@@ -203,7 +192,6 @@ macro_rules! start_playback {
         }
     }};
 }
-
 
 /// Helper to fetch program info from schedule for a channel
 async fn fetch_program_info_for_channel(
@@ -269,7 +257,10 @@ fn initialize_channels(
         })
         .collect();
 
-    (channel_map, ModelRc::from(Rc::new(VecModel::from(channel_items))))
+    (
+        channel_map,
+        ModelRc::from(Rc::new(VecModel::from(channel_items))),
+    )
 }
 
 /// Refresh program list based on current tab
@@ -378,6 +369,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Provides truly gapless playback with continuous AAC decoding via Symphonia
     let streaming_player = Arc::new(SendSafeGaplessPlayer::new()?);
 
+    // Create episode cache for background downloads
+    let episode_cache = EpisodeCache::new();
+
+    // Create file player for seekable playback (when episode is downloaded)
+    let file_player = Arc::new(SendSafeFilePlayer::new()?);
+
+    // Track current episode URL for seeking
+    let current_episode_url: Arc<std::sync::Mutex<Option<String>>> =
+        Arc::new(std::sync::Mutex::new(None));
+
+    // Track which player is active (true = file_player, false = streaming_player)
+    let using_file_player: Arc<std::sync::Mutex<bool>> = Arc::new(std::sync::Mutex::new(false));
+
+    // Initialize volume to match UI default (0.5 = 50%)
+    // Note: UI uses logarithmic scale, so 0.5 slider = 0.25 actual volume
+    streaming_player.set_volume(0.25);
+    file_player.set_volume(0.25);
+
     println!("Backend components initialized");
 
     // ========================================================================
@@ -422,6 +431,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     {
         let ui_weak = ui.as_weak();
         let player = streaming_player.clone();
+        let file_player_clone = file_player.clone();
+        let using_file_player_clone = using_file_player.clone();
         let runtime_handle = runtime.handle().clone();
         let api_client_clone = api_client.clone();
         let channel_map_clone = channel_map.clone();
@@ -430,6 +441,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ui.on_channel_selected(move |channel_id, stream_url| {
             println!("Channel selected: ID={}, URL={}", channel_id, stream_url);
 
+            // Stop file player if it's playing an episode
+            file_player_clone.stop();
+            if let Ok(mut using_file) = using_file_player_clone.lock() {
+                *using_file = false;
+            }
+
             // Store the current channel ID for periodic program updates
             if let Ok(mut current_id) = current_channel_id_clone.lock() {
                 *current_id = Some(channel_id);
@@ -437,6 +454,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             let Some(ui) = ui_weak.upgrade() else { return };
             ui.set_is_loading(true);
+
+            // Clear episode duration for live radio
+            // program-duration will be set by the live position update callback
+            ui.set_playback_duration(0.0);
+            ui.set_playback_position(0.0);
+            ui.set_program_duration(0.0); // Will be calculated when program info arrives
 
             // Get channel name using O(1) HashMap lookup
             let channel_name = channel_map_clone
@@ -454,11 +477,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             // Spawn async task for program info and gapless streaming
             runtime_handle.spawn(async move {
                 // Fetch and display current program information
-                if let Some(episode) = fetch_program_info_for_channel(&api_clone, channel_id).await {
-                    let image_bytes = fetch_image_bytes(episode.social_image.clone().unwrap_or_default()).await;
+                if let Some(episode) = fetch_program_info_for_channel(&api_clone, channel_id).await
+                {
+                    let image_bytes =
+                        fetch_image_bytes(episode.social_image.clone().unwrap_or_default()).await;
                     let _ = ui_weak_clone.upgrade_in_event_loop(move |ui| {
-                        let show_image = image_bytes.and_then(bytes_to_slint_image).unwrap_or_default();
+                        let show_image = image_bytes
+                            .and_then(bytes_to_slint_image)
+                            .unwrap_or_default();
                         ui.set_current_program(program_info_from_episode(&episode, show_image));
+
+                        // Trigger initial live position update
+                        ui.invoke_update_live_position();
                     });
                 }
 
@@ -467,35 +497,212 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     }
 
-    // CALLBACK 2: Stop button
+    // CALLBACK 2: Play/Pause button
     {
         let ui_weak = ui.as_weak();
-        let player = streaming_player.clone();
-        let runtime_handle = runtime.handle().clone();
-        let current_channel_id_clone = current_channel_id.clone();
+        let streaming_player_clone = streaming_player.clone();
+        let file_player_clone = file_player.clone();
+        let using_file_player_clone = using_file_player.clone();
 
-        ui.on_stop_clicked(move || {
-            println!("Stopping playback");
+        ui.on_play_pause_clicked(move || {
+            let ui_clone = ui_weak.upgrade().unwrap();
+            let is_playing = ui_clone.get_is_playing();
 
-            // Clear the current channel ID to stop periodic program updates
-            if let Ok(mut current_id) = current_channel_id_clone.lock() {
-                *current_id = None;
+            // Check which player is active
+            let is_using_file_player = using_file_player_clone
+                .lock()
+                .ok()
+                .map(|f| *f)
+                .unwrap_or(false);
+
+            if is_playing {
+                // Pause playback
+                println!("Pausing playback");
+                if is_using_file_player {
+                    file_player_clone.pause();
+                } else {
+                    streaming_player_clone.pause();
+                }
+                ui_clone.set_is_playing(false);
+            } else {
+                // Resume playback (or do nothing if no channel selected)
+                let channel_name = ui_clone.get_current_channel_name();
+
+                if channel_name != "No channel selected" {
+                    println!("Resuming playback");
+                    if is_using_file_player {
+                        file_player_clone.resume();
+                    } else {
+                        streaming_player_clone.resume();
+                    }
+                    ui_clone.set_is_playing(true);
+                } else {
+                    println!("No channel selected - cannot resume playback");
+                }
             }
+        });
+    }
 
+    // CALLBACK 2b: Volume changed
+    {
+        let streaming_player_clone = streaming_player.clone();
+        let file_player_clone = file_player.clone();
+
+        ui.on_volume_changed(move |volume| {
+            streaming_player_clone.set_volume(volume);
+            file_player_clone.set_volume(volume);
+        });
+    }
+
+    // CALLBACK 2c: Seek to position (works once episode is downloaded)
+    {
+        let ui_weak = ui.as_weak();
+        let episode_cache_clone = episode_cache.clone();
+        let current_episode_url_clone = current_episode_url.clone();
+        let file_player_clone = file_player.clone();
+        let streaming_player_clone = streaming_player.clone();
+        let using_file_player_clone = using_file_player.clone();
+        let runtime_handle = runtime.handle().clone();
+
+        ui.on_seek_to_position(move |position| {
+            println!("Seeking to position: {:.1}s", position);
+
+            let episode_url_opt = {
+                current_episode_url_clone
+                    .lock()
+                    .ok()
+                    .and_then(|url| url.clone())
+            };
+
+            let Some(episode_url) = episode_url_opt else {
+                println!("No episode currently playing");
+                return;
+            };
+
+            let cache_clone = episode_cache_clone.clone();
+            let player_clone = file_player_clone.clone();
+            let streaming_clone = streaming_player_clone.clone();
+            let using_file_clone = using_file_player_clone.clone();
             let ui_clone = ui_weak.clone();
-            let player_clone = player.clone();
 
-            // stop() is async, spawn task
             runtime_handle.spawn(async move {
-                player_clone.stop().await;
-                if let Err(e) = ui_clone.upgrade_in_event_loop(|ui| {
-                    ui.set_is_playing(false);
-                    ui.set_current_channel_name("No channel selected".into());
-                    ui.set_current_program(empty_program_info());
-                }) {
-                    eprintln!("Failed to update UI after stop: {:?}", e);
+                // Check if episode is downloaded
+                if !cache_clone.is_downloaded(&episode_url).await {
+                    println!("Episode not downloaded yet, cannot seek");
+                    return;
+                }
+
+                // Get downloaded data
+                let Some(data) = cache_clone.get(&episode_url).await else {
+                    println!("Failed to get downloaded data");
+                    return;
+                };
+
+                // Stop both players immediately before seeking
+                streaming_clone.stop().await;
+                player_clone.stop();
+
+                // Play from downloaded file at seek position
+                println!("Playing from downloaded file at {}s", position);
+
+                match player_clone
+                    .play_from_bytes_at_position(data, position)
+                    .await
+                {
+                    Ok(_) => {
+                        println!("Successfully seeked to {}s", position);
+
+                        // Mark that we're now using file player
+                        if let Ok(mut using_file) = using_file_clone.lock() {
+                            *using_file = true;
+                        }
+
+                        // Update UI
+                        let _ = ui_clone.upgrade_in_event_loop(move |ui| {
+                            ui.set_playback_position(position);
+                            ui.set_is_playing(true);
+                        });
+                    }
+                    Err(e) => {
+                        eprintln!("Failed to seek: {}", e);
+
+                        // Resume streaming as fallback
+                        streaming_clone.resume();
+                    }
                 }
             });
+        });
+    }
+
+    // CALLBACK 2d: Update live radio position based on current time
+    {
+        let ui_weak = ui.as_weak();
+
+        ui.on_update_live_position(move || {
+            let Some(ui) = ui_weak.upgrade() else {
+                return;
+            };
+
+            // Only update if playing live radio (duration = 0) with program info
+            if ui.get_playback_duration() > 0.0 {
+                return;
+            }
+
+            let program = ui.get_current_program();
+            if program.start_time.is_empty() || program.end_time.is_empty() {
+                return;
+            }
+
+            // Parse times (format: "HH:MM")
+            let parse_time = |time_str: &str| -> Option<(i32, i32)> {
+                let parts: Vec<&str> = time_str.split(':').collect();
+                if parts.len() == 2 {
+                    let hours = parts[0].parse::<i32>().ok()?;
+                    let minutes = parts[1].parse::<i32>().ok()?;
+                    Some((hours, minutes))
+                } else {
+                    None
+                }
+            };
+
+            let Some((start_h, start_m)) = parse_time(&program.start_time) else {
+                return;
+            };
+            let Some((end_h, end_m)) = parse_time(&program.end_time) else {
+                return;
+            };
+
+            // Get current time (in Stockholm timezone - CET/CEST)
+            use chrono::Timelike;
+            let now = chrono::Local::now();
+            let current_h = now.hour() as i32;
+            let current_m = now.minute() as i32;
+
+            // Calculate times in minutes since midnight
+            let start_minutes = start_h * 60 + start_m;
+            let mut end_minutes = end_h * 60 + end_m;
+
+            // Handle midnight wraparound
+            if end_minutes < start_minutes {
+                end_minutes += 24 * 60;
+            }
+
+            let current_minutes = current_h * 60 + current_m;
+
+            // Calculate position and duration
+            let duration = (end_minutes - start_minutes) as f32 * 60.0; // seconds
+            let mut position = (current_minutes - start_minutes) as f32 * 60.0; // seconds
+
+            // Handle case where current time is after midnight but program started before
+            if position < 0.0 {
+                position += 24.0 * 60.0 * 60.0; // Add 24 hours in seconds
+            }
+
+            // Clamp position to valid range
+            position = position.max(0.0).min(duration);
+
+            ui.set_program_duration(duration);
+            ui.set_playback_position(position);
         });
     }
 
@@ -546,12 +753,32 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // CALLBACK 6: Episode selected for playback
     {
         let ui_weak = ui.as_weak();
-        let player = streaming_player.clone();
+        let streaming_player_clone = streaming_player.clone();
+        let file_player_clone = file_player.clone();
+        let episode_cache_clone = episode_cache.clone();
+        let current_episode_url_clone = current_episode_url.clone();
+        let using_file_player_clone = using_file_player.clone();
         let runtime_handle = runtime.handle().clone();
         let all_programs_clone = all_programs.clone();
         let current_channel_id_clone = current_channel_id.clone();
 
         ui.on_episode_selected(move |episode_id| {
+            // Stop both players before starting new episode
+            let streaming_clone = streaming_player_clone.clone();
+            let file_clone = file_player_clone.clone();
+            let using_file_clone = using_file_player_clone.clone();
+            let runtime = runtime_handle.clone();
+
+            runtime.spawn(async move {
+                streaming_clone.stop().await;
+                file_clone.stop();
+
+                // Reset player tracking flag
+                if let Ok(mut using_file) = using_file_clone.lock() {
+                    *using_file = false;
+                }
+            });
+
             // Stop live program polling
             if let Ok(mut current_id) = current_channel_id_clone.lock() {
                 *current_id = None;
@@ -578,10 +805,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 has_podcasts: false,
             });
 
+            // Set playback duration (in seconds)
+            ui.set_playback_duration(episode.duration as f32);
+            ui.set_playback_position(0.0);
+            ui.set_program_duration(0.0); // Clear program duration (this is an episode, not live)
+
             // Load program image in background if available
             let program_image_url = {
                 let all_programs_lock = all_programs_clone.lock().unwrap();
-                core::podcast::get_program_image_url(&all_programs_lock, ui.get_selected_program_id())
+                core::podcast::get_program_image_url(
+                    &all_programs_lock,
+                    ui.get_selected_program_id(),
+                )
             };
 
             if let Some(image_url) = program_image_url {
@@ -593,18 +828,56 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 runtime_handle.spawn(async move {
                     let image_bytes = fetch_image_bytes(image_url).await;
                     let _ = ui_clone.upgrade_in_event_loop(move |ui| {
-                        let show_image = image_bytes.and_then(bytes_to_slint_image).unwrap_or_default();
+                        let show_image = image_bytes
+                            .and_then(bytes_to_slint_image)
+                            .unwrap_or_default();
                         ui.set_current_program(ProgramInfo {
-                            title, description: desc, start_time: "".into(), end_time: date,
-                            show_image, program_id: 0, has_podcasts: false,
+                            title,
+                            description: desc,
+                            start_time: "".into(),
+                            end_time: date,
+                            show_image,
+                            program_id: 0,
+                            has_podcasts: false,
                         });
                     });
                 });
             }
 
-            // Start playback
+            // Start playback using streaming player (fast loading)
             let url = episode.url.to_string();
-            runtime_handle.spawn(start_playback!(player, url, ui_weak));
+
+            // Store current episode URL
+            if let Ok(mut current_url) = current_episode_url_clone.lock() {
+                *current_url = Some(url.clone());
+            }
+
+            // Start background download for seeking with progress tracking
+            let ui_clone_for_progress = ui_weak.clone();
+            episode_cache_clone.start_download(url.clone(), move |downloaded, total| {
+                let percent = if total > 0 {
+                    (downloaded as f64 / total as f64 * 100.0) as i32
+                } else {
+                    0
+                };
+
+                let ui_for_clear = ui_clone_for_progress.clone();
+                let _ = ui_clone_for_progress.upgrade_in_event_loop(move |ui| {
+                    if downloaded >= total && total > 0 {
+                        ui.set_download_status("Downloaded (100%)".into());
+                        // Clear after 2 seconds
+                        slint::Timer::single_shot(std::time::Duration::from_secs(2), move || {
+                            let _ = ui_for_clear.upgrade_in_event_loop(|ui| {
+                                ui.set_download_status("".into());
+                            });
+                        });
+                    } else {
+                        ui.set_download_status(format!("Downloading ({}%)", percent).into());
+                    }
+                });
+            });
+
+            runtime_handle.spawn(start_playback!(streaming_player_clone, url, ui_weak));
         });
     }
 

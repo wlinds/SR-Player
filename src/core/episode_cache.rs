@@ -1,12 +1,12 @@
 // Downloads episodes in the background while streaming plays
 // Allows seeking once download completes
 
+use anyhow::Result;
 use bytes::Bytes;
+use log::info;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use anyhow::Result;
-use log::info;
 
 #[derive(Clone)]
 pub struct EpisodeCache {
