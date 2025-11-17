@@ -24,10 +24,12 @@ use bytes::Bytes;
 use crossbeam_channel;
 use log::{error, info, warn};
 use rodio::{OutputStream, OutputStreamHandle, Sink, Source};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use symphonia::core::audio::{AudioBufferRef, Signal};
 use symphonia::core::codecs::{Decoder, DecoderOptions};
+use crate::core::dvr_buffer::DvrBuffer;
 use symphonia::core::errors::Error as SymphoniaError;
 use symphonia::core::formats::{FormatOptions, FormatReader};
 use symphonia::core::io::{MediaSource, MediaSourceStream};
@@ -431,31 +433,68 @@ enum StreamCommand {
     Stop,
 }
 
-// Gapless streaming audio player using Symphonia
+// Gapless streaming audio player using Symphonia with dual DVR buffers
 pub struct GaplessPlayer {
     _stream: OutputStream,
     _stream_handle: OutputStreamHandle,
     command_tx: Option<mpsc::UnboundedSender<StreamCommand>>,
     download_handle: Option<JoinHandle<()>>,
+    decoder_handle: Option<tokio::task::JoinHandle<()>>,  // Track decoder task
+    stream_generation: Arc<AtomicU64>,  // Detect stale tasks on rapid channel switching
+    current_generation: u64,            // Current stream generation number
+    http_client: reqwest::Client,       // Shared HTTP client with connection pooling
     sink: Arc<Mutex<Sink>>,
     stats: Arc<Mutex<StreamStats>>,
+    live_buffer: Arc<DvrBuffer>,        // Buffer for live edge (always recording)
+    playback_buffer: Arc<DvrBuffer>,    // Buffer for time-shifted playback
+    buffer_start_time: Arc<Mutex<Option<Instant>>>,
+    is_at_live_edge: Arc<Mutex<bool>>,  // Track if we're at live edge or time-shifted
 }
 
 impl GaplessPlayer {
-    // Create a new gapless streaming player
-    pub fn new() -> Result<Self> {
+    // Create a new gapless streaming player with an optional shared HTTP client
+    // If http_client is None, creates a new client for this player
+    // If http_client is Some, uses the shared client (enables connection pooling across players!)
+    pub fn new_with_client(http_client: Option<reqwest::Client>) -> Result<Self> {
         let (stream, stream_handle) =
             OutputStream::try_default().context("Failed to create audio output stream")?;
 
         let sink = Sink::try_new(&stream_handle).context("Failed to create audio sink")?;
+
+        // Use provided client or create new one
+        let http_client = match http_client {
+            Some(client) => client,
+            None => {
+                // Create HTTP client with connection pooling and keepalive
+                // This reuses TCP connections across multiple streams, reducing latency
+                reqwest::Client::builder()
+                    .user_agent("SR-Player/3.0-Gapless")
+                    .pool_max_idle_per_host(5)          // Keep 5 idle connections per host
+                    .pool_idle_timeout(Duration::from_secs(90))  // Keep connections alive for 90s
+                    .connect_timeout(Duration::from_secs(10))    // Reduced from 30s
+                    .tcp_keepalive(Some(Duration::from_secs(30)))
+                    .http2_keep_alive_interval(Some(Duration::from_secs(10)))  // HTTP/2 keepalive
+                    .http2_keep_alive_timeout(Duration::from_secs(20))
+                    .build()
+                    .context("Failed to create HTTP client")?
+            }
+        };
 
         Ok(Self {
             _stream: stream,
             _stream_handle: stream_handle,
             command_tx: None,
             download_handle: None,
+            decoder_handle: None,
+            stream_generation: Arc::new(AtomicU64::new(0)),
+            current_generation: 0,
+            http_client,
             sink: Arc::new(Mutex::new(sink)),
             stats: Arc::new(Mutex::new(StreamStats::new())),
+            live_buffer: Arc::new(DvrBuffer::new()),
+            playback_buffer: Arc::new(DvrBuffer::new()),
+            buffer_start_time: Arc::new(Mutex::new(None)),
+            is_at_live_edge: Arc::new(Mutex::new(true)),
         })
     }
 
@@ -466,6 +505,14 @@ impl GaplessPlayer {
         // Stop any existing stream
         self.stop().await;
 
+        // Increment stream generation to invalidate any old tasks
+        self.current_generation += 1;
+        self.stream_generation.store(self.current_generation, Ordering::SeqCst);
+        let generation = self.current_generation;
+        let generation_check = self.stream_generation.clone();
+
+        info!("Stream generation: {}", generation);
+
         // Create channels for communication
         let (command_tx, mut command_rx) = mpsc::unbounded_channel();
         let (data_tx, data_rx) = crossbeam_channel::unbounded::<Bytes>();
@@ -474,31 +521,52 @@ impl GaplessPlayer {
 
         let stats = self.stats.clone();
         let sink = self.sink.clone();
+        let live_buffer = self.live_buffer.clone();
+        let buffer_start_time = self.buffer_start_time.clone();
+        let generation_check_download = generation_check.clone();
+        let client = self.http_client.clone();  // Reuse the pooled HTTP client
 
         // Spawn download task
         let download_handle = tokio::spawn(async move {
-            info!("Download task started");
+            info!("Download task started (generation {})", generation);
 
-            // Create HTTP client with streaming support
-            let client = match reqwest::Client::builder()
-                .user_agent("SR-Player/3.0-Gapless")
-                .connect_timeout(Duration::from_secs(30))
-                .tcp_keepalive(Some(Duration::from_secs(30)))
-                .build()
-            {
-                Ok(client) => client,
-                Err(e) => {
-                    error!("Failed to create HTTP client: {}", e);
-                    return;
-                }
-            };
+            // Check if still current before starting
+            if generation_check_download.load(Ordering::SeqCst) != generation {
+                info!("Download task generation {} superseded, exiting early", generation);
+                return;
+            }
 
-            // Start streaming request
-            let mut response = match client.get(&url).send().await {
-                Ok(resp) => resp,
-                Err(e) => {
-                    error!("Failed to connect: {}", e);
-                    return;
+            // Retry logic with exponential backoff
+            const MAX_RETRIES: u32 = 3;
+            let mut retry_count = 0;
+            let mut retry_delay = Duration::from_millis(500);
+
+            let mut response = loop {
+                let connect_start = Instant::now();
+                info!("Connecting to stream (attempt {})...", retry_count + 1);
+                match client.get(&url).send().await {
+                    Ok(resp) => {
+                        let elapsed = connect_start.elapsed().as_millis();
+                        // Log the final URL after redirects
+                        let final_url = resp.url().to_string();
+                        info!("HTTP connection established successfully in {:.1}ms", elapsed);
+                        info!("Final URL after redirects: {}", final_url);
+                        if elapsed > 1000 {
+                            warn!("Slow connection detected ({:.1}ms) - connection pool may not be working", elapsed);
+                        }
+                        break resp;
+                    }
+                    Err(e) => {
+                        retry_count += 1;
+                        if retry_count >= MAX_RETRIES {
+                            error!("Failed to connect after {} retries: {}", MAX_RETRIES, e);
+                            return;
+                        }
+                        warn!("Connection failed (attempt {}/{}): {}, retrying in {:?}...",
+                              retry_count, MAX_RETRIES, e, retry_delay);
+                        tokio::time::sleep(retry_delay).await;
+                        retry_delay *= 2; // Exponential backoff
+                    }
                 }
             };
 
@@ -507,40 +575,106 @@ impl GaplessPlayer {
             let mut bytes_downloaded = 0;
             let start_time = Instant::now();
             let mut initial_buffer = Vec::new();
-            const INITIAL_BUFFER_SIZE: usize = 8_192; // 8KB initial buffer
+            const INITIAL_BUFFER_SIZE: usize = 2_048; // 2KB initial buffer - start playback faster
 
             // Buffer initial chunks before starting decoder
             // This prevents "EOF at 0 bytes" errors and ensures smooth startup
+            let buffer_start = Instant::now();
+            info!("Starting initial buffering ({} bytes)...", INITIAL_BUFFER_SIZE);
             while initial_buffer.len() < INITIAL_BUFFER_SIZE {
-                match response.chunk().await {
+                // No timeout - SR streams deliver chunks quickly (~300ms)
+                // If connection dies, response.chunk() will return None naturally
+                let chunk_result = response.chunk().await;
+
+                match chunk_result {
                     Ok(Some(chunk)) => {
                         bytes_downloaded += chunk.len();
                         initial_buffer.extend_from_slice(&chunk);
+                        // Only log at completion, not every chunk
                     }
                     Ok(None) => {
-                        error!("Stream ended while buffering initial data");
-                        return;
+                        error!("Stream ended while buffering initial data, attempting reconnect...");
+                        // Attempt reconnection
+                        retry_count = 0;
+                        retry_delay = Duration::from_millis(500);
+                        response = loop {
+                            match client.get(&url).send().await {
+                                Ok(resp) => {
+                                    info!("Reconnected successfully, resuming buffering...");
+                                    break resp;
+                                }
+                                Err(e) => {
+                                    retry_count += 1;
+                                    if retry_count >= MAX_RETRIES {
+                                        error!("Failed to reconnect after {} retries: {}", MAX_RETRIES, e);
+                                        return;
+                                    }
+                                    warn!("Reconnection failed (attempt {}/{}): {}, retrying in {:?}...",
+                                          retry_count, MAX_RETRIES, e, retry_delay);
+                                    tokio::time::sleep(retry_delay).await;
+                                    retry_delay *= 2;
+                                }
+                            }
+                        };
+                        continue;
                     }
                     Err(e) => {
-                        error!("Error reading initial chunk: {}", e);
-                        return;
+                        error!("Error reading initial chunk: {}, attempting reconnect...", e);
+                        // Attempt reconnection
+                        retry_count = 0;
+                        retry_delay = Duration::from_millis(500);
+                        response = loop {
+                            match client.get(&url).send().await {
+                                Ok(resp) => {
+                                    info!("Reconnected successfully, resuming buffering...");
+                                    break resp;
+                                }
+                                Err(e) => {
+                                    retry_count += 1;
+                                    if retry_count >= MAX_RETRIES {
+                                        error!("Failed to reconnect after {} retries: {}", MAX_RETRIES, e);
+                                        return;
+                                    }
+                                    warn!("Reconnection failed (attempt {}/{}): {}, retrying in {:?}...",
+                                          retry_count, MAX_RETRIES, e, retry_delay);
+                                    tokio::time::sleep(retry_delay).await;
+                                    retry_delay *= 2;
+                                }
+                            }
+                        };
+                        continue;
                     }
                 }
             }
 
             info!(
-                "Initial buffer complete ({} bytes), starting playback...",
-                initial_buffer.len()
+                "Initial buffer complete ({} bytes) in {:.1}ms, sending to decoder...",
+                initial_buffer.len(),
+                buffer_start.elapsed().as_millis()
             );
 
-            // Send the buffered data immediately
-            if data_tx.send(Bytes::from(initial_buffer)).is_err() {
-                error!("Failed to send initial buffer");
+            // Check if still current before sending data
+            if generation_check_download.load(Ordering::SeqCst) != generation {
+                info!("Download task generation {} superseded after buffering, exiting", generation);
                 return;
             }
 
+            // Send the buffered data immediately
+            if data_tx.send(Bytes::from(initial_buffer)).is_err() {
+                error!("Failed to send initial buffer - decoder already disconnected");
+                return;
+            }
+
+            info!("Initial buffer sent successfully, continuing stream...");
+
             // Stream remaining bytes continuously
             while let Some(chunk_result) = response.chunk().await.transpose() {
+                // Check if still current generation
+                if generation_check_download.load(Ordering::SeqCst) != generation {
+                    info!("Download task generation {} superseded during streaming, exiting", generation);
+                    break;
+                }
+
                 // Check for stop command (non-blocking)
                 if let Ok(StreamCommand::Stop) = command_rx.try_recv() {
                     info!("Stop command received");
@@ -559,6 +693,16 @@ impl GaplessPlayer {
                                 (bytes_downloaded as f32 * 8.0) / (elapsed * 1000.0);
                             stats_guard.bitrate_kbps = stats_guard.download_speed_kbps;
                             stats_guard.last_update = Instant::now();
+                        }
+
+                        // DVR: Always write to live buffer (it tracks the live edge)
+                        // We don't actually need the playback_buffer - the live_buffer
+                        // contains all the data we need for seeking!
+                        live_buffer.push(chunk.clone()).await;
+
+                        // Initialize buffer start time on first chunk
+                        if buffer_start_time.lock().await.is_none() {
+                            *buffer_start_time.lock().await = Some(Instant::now());
                         }
 
                         // Send chunk to decoder
@@ -581,61 +725,106 @@ impl GaplessPlayer {
 
         // Spawn decoder task
         let sink_clone = sink.clone();
-        tokio::task::spawn_blocking(move || {
-            info!("Decoder task started, waiting for initial data...");
+        let decoder_handle = tokio::task::spawn_blocking(move || {
+            info!("Decoder task started (generation {}), waiting for initial data...", generation);
 
-            // Wait for first chunk to arrive before creating Symphonia source
-            // This ensures we have data to probe when Symphonia initializes
-            match data_rx.recv_timeout(Duration::from_secs(3)) {
-                Ok(first_chunk) => {
-                    info!(
-                        "Received first chunk ({} bytes), creating decoder...",
-                        first_chunk.len()
-                    );
+            // Check if still current before waiting
+            if generation_check.load(Ordering::SeqCst) != generation {
+                info!("Decoder task generation {} superseded, exiting early", generation);
+                return;
+            }
 
-                    // Create our custom media source with the first chunk already received
-                    let mut media_source = Box::new(ChannelMediaSource::new(data_rx));
-                    // Store the first chunk in the media source
-                    media_source.current_chunk = Some(first_chunk);
-                    media_source.current_position = 0;
+            // Retry logic for receiving initial data
+            // SR servers are usually fast (~300ms), but can occasionally be slow (15s+)
+            // due to rate limiting on rapid channel switches or slow connections
+            // Max wait: 3 retries × 10s = 30 seconds total (matches download connect timeout)
+            const MAX_DECODER_RETRIES: u32 = 3;
+            let mut retry_count = 0;
 
-                    // Create Symphonia source - now it has data to probe
-                    let symphonia_source = match SymphoniaSource::new(media_source) {
-                        Ok(source) => source,
-                        Err(e) => {
-                            error!("Failed to create Symphonia source: {}", e);
+            let first_chunk = loop {
+                match data_rx.recv_timeout(Duration::from_secs(10)) {
+                    Ok(chunk) => break chunk,
+                    Err(e) => {
+                        // Check if superseded during timeout
+                        if generation_check.load(Ordering::SeqCst) != generation {
+                            info!("Decoder task generation {} superseded during timeout, exiting", generation);
                             return;
                         }
-                    };
 
-                    // Append to sink and play!
-                    let sink_guard = tokio::runtime::Handle::current().block_on(sink_clone.lock());
-                    sink_guard.append(symphonia_source);
-                    sink_guard.play();
-
-                    info!("Playback started!");
+                        retry_count += 1;
+                        if retry_count >= MAX_DECODER_RETRIES {
+                            error!("Timeout waiting for initial data after {} retries: {}", MAX_DECODER_RETRIES, e);
+                            return;
+                        }
+                        warn!("Decoder timeout (attempt {}/{}): {}, waiting for data...",
+                              retry_count, MAX_DECODER_RETRIES, e);
+                        // Continue waiting - the download task might still be buffering
+                    }
                 }
+            };
+
+            info!(
+                "Received first chunk ({} bytes), creating decoder...",
+                first_chunk.len()
+            );
+
+            // Create our custom media source with the first chunk already received
+            let mut media_source = Box::new(ChannelMediaSource::new(data_rx));
+            // Store the first chunk in the media source
+            media_source.current_chunk = Some(first_chunk);
+            media_source.current_position = 0;
+
+            // Create Symphonia source - now it has data to probe
+            let symphonia_source = match SymphoniaSource::new(media_source) {
+                Ok(source) => source,
                 Err(e) => {
-                    error!("Timeout waiting for initial data: {}", e);
+                    error!("Failed to create Symphonia source: {}", e);
+                    return;
                 }
-            }
+            };
+
+            // Append to sink and play!
+            let sink_guard = tokio::runtime::Handle::current().block_on(sink_clone.lock());
+            sink_guard.append(symphonia_source);
+            sink_guard.play();
+
+            info!("Playback started!");
         });
+
+        self.decoder_handle = Some(decoder_handle);
 
         Ok(())
     }
 
     // Stop the current stream
     pub async fn stop(&mut self) {
+        info!("Stopping stream...");
+
         if let Some(tx) = self.command_tx.take() {
             let _ = tx.send(StreamCommand::Stop);
         }
 
+        // Abort both download and decoder tasks
         if let Some(handle) = self.download_handle.take() {
+            handle.abort();
+        }
+
+        if let Some(handle) = self.decoder_handle.take() {
             handle.abort();
         }
 
         let sink = self.sink.lock().await;
         sink.stop();
+
+        // Clear both DVR buffers
+        self.live_buffer.clear().await;
+        self.playback_buffer.clear().await;
+
+        // Reset buffer start time
+        *self.buffer_start_time.lock().await = None;
+
+        // Reset to live edge state
+        *self.is_at_live_edge.lock().await = true;
     }
 
     // Get current streaming statistics
@@ -673,5 +862,99 @@ impl GaplessPlayer {
         if let Ok(sink) = self.sink.try_lock() {
             sink.set_volume(volume);
         }
+    }
+
+    // ========================================================================
+    // DVR BUFFER METHODS
+    // ========================================================================
+
+    // Get the DVR buffer depth (how far back we can rewind)
+    pub async fn get_buffer_depth(&self) -> Duration {
+        // Always use live_buffer - it contains all the data
+        self.live_buffer.get_buffer_depth().await
+    }
+
+    // Get the time range of buffered content (oldest_secs, newest_secs)
+    pub async fn get_buffer_time_range(&self) -> (f32, f32) {
+        // Always use live_buffer - it contains all the data
+        if let Some(start_time) = *self.buffer_start_time.lock().await {
+            let elapsed = start_time.elapsed().as_secs_f32();
+            let depth = self.live_buffer.get_buffer_depth().await.as_secs_f32();
+            let newest = elapsed;
+            let oldest = elapsed - depth;
+            (oldest, newest)
+        } else {
+            (0.0, 0.0)
+        }
+    }
+
+    // Check if we can seek to a specific offset
+    pub async fn can_seek_to(&self, offset_secs: f32) -> bool {
+        let (oldest, newest) = self.get_buffer_time_range().await;
+        offset_secs >= oldest && offset_secs <= newest
+    }
+
+    // Get buffered audio data from a specific offset
+    pub async fn get_buffer_data_from_offset(&self, offset_secs: f32) -> Result<Vec<u8>> {
+        // Always use live_buffer - it contains all the data
+        // offset_secs is a timestamp from when the buffer started recording
+        // (same coordinate system as get_buffer_time_range returns)
+        if let Some(_start_time) = *self.buffer_start_time.lock().await {
+            // Pass offset_secs directly - it's already in the right coordinate system
+            // (offset from when recording started)
+            let buffer_offset = offset_secs;
+
+            // get_from_offset returns Option<Vec<Bytes>>, we need to convert to Vec<u8>
+            if let Some(chunks) = self.live_buffer.get_from_offset(Duration::from_secs_f32(buffer_offset)).await {
+                // Flatten Vec<Bytes> into Vec<u8>
+                let mut data = Vec::new();
+                for chunk in chunks {
+                    data.extend_from_slice(&chunk);
+                }
+                Ok(data)
+            } else {
+                anyhow::bail!("No data available at offset {}", offset_secs)
+            }
+        } else {
+            anyhow::bail!("Buffer not initialized")
+        }
+    }
+
+    // Seek to a specific time offset in the DVR buffer
+    // NOTE: This method just checks if seeking is possible and returns the clamped position.
+    // The actual seeking (getting buffer data and playing it) is handled by the UI layer
+    // using get_buffer_data_from_offset() and the file player.
+    pub async fn seek_to(&mut self, offset_secs: f32) -> Result<f32> {
+        if !self.can_seek_to(offset_secs).await {
+            anyhow::bail!("Cannot seek to {}: out of buffer range", offset_secs);
+        }
+
+        Ok(offset_secs)
+    }
+
+    // ========================================================================
+    // BUFFER STATE MANAGEMENT
+    // ========================================================================
+
+    // Check if currently at live edge
+    pub async fn is_at_live_edge(&self) -> bool {
+        *self.is_at_live_edge.lock().await
+    }
+
+    // Set whether we're at live edge or time-shifted
+    pub async fn set_at_live_edge(&self, at_live: bool) {
+        *self.is_at_live_edge.lock().await = at_live;
+    }
+
+    // Switch to live buffer (when catching up to live)
+    pub async fn switch_to_live_buffer(&self) {
+        self.set_at_live_edge(true).await;
+        // Clear playback buffer since we're back to live
+        self.playback_buffer.clear().await;
+    }
+
+    // Switch to playback buffer (when seeking backward from live)
+    pub async fn switch_to_playback_buffer(&self) {
+        self.set_at_live_edge(false).await;
     }
 }
