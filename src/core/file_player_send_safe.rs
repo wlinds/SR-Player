@@ -18,6 +18,9 @@ pub enum FilePlayerCommand {
     Pause,
     Resume,
     SetVolume(f32),
+    IsFinished {
+        response: oneshot::Sender<bool>,
+    },
     Shutdown,
 }
 
@@ -72,6 +75,10 @@ impl SendSafeFilePlayer {
                         FilePlayerCommand::SetVolume(volume) => {
                             player.set_volume(volume);
                         }
+                        FilePlayerCommand::IsFinished { response } => {
+                            let is_finished = player.is_finished().await;
+                            let _ = response.send(is_finished);
+                        }
                         FilePlayerCommand::Shutdown => {
                             player.stop().await;
                             break;
@@ -118,6 +125,17 @@ impl SendSafeFilePlayer {
     // Set volume (0.0 to 1.0)
     pub fn set_volume(&self, volume: f32) {
         let _ = self.command_tx.send(FilePlayerCommand::SetVolume(volume));
+    }
+
+    // Check if the sink has finished playing all queued audio
+    pub async fn is_finished(&self) -> bool {
+        let (response_tx, response_rx) = oneshot::channel();
+        if self.command_tx.send(FilePlayerCommand::IsFinished {
+            response: response_tx,
+        }).is_err() {
+            return true; // If channel is closed, consider it finished
+        }
+        response_rx.await.unwrap_or(true)
     }
 }
 
