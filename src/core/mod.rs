@@ -21,6 +21,9 @@
 // Without 'pub', the module would be private to the core module only.
 
 pub mod api;
+pub mod channel_pool;
+pub mod channel_pool_send_safe;
+pub mod dvr_buffer;
 pub mod episode_cache;
 pub mod file_player;
 pub mod file_player_send_safe;
