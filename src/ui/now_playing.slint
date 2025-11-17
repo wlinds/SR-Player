@@ -21,6 +21,10 @@ export component NowPlaying inherits Rectangle {
     // Current program information (populated when a channel is playing)
     in-out property <ProgramInfo> current-program;
 
+    // Live radio state (for LIVE indicator)
+    in-out property <bool> is-live: false;
+    in-out property <float> playback-duration: 0;
+
     // ================================================================
     // CALLBACKS
     // ================================================================
@@ -88,6 +92,28 @@ export component NowPlaying inherits Rectangle {
                     max-height: 40px;
                 }
             }
+        }
+    }
+
+    // ================================================================
+    // LIVE INDICATOR (Bottom Right Corner - aligned with artwork bottom)
+    // ================================================================
+    // LIVE indicator (shown for live radio at live edge)
+    if playback-duration == 0 && is-live && current-program.title != "": Rectangle {
+        x: parent.width - self.width - 16px;
+        y: 138px;  // Align bottom with artwork: (8 + 8 + 140) - 18 = 138px
+        width: 45px;
+        height: 18px;
+        background: #EF4444;
+        border-radius: 3px;
+
+        Text {
+            text: "LIVE";
+            color: #ffffff;
+            font-size: 10px;
+            font-weight: 700;
+            horizontal-alignment: center;
+            vertical-alignment: center;
         }
     }
 }
