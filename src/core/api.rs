@@ -9,6 +9,8 @@
 
 use anyhow::{Context, Result};
 use log::{debug, info};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use crate::core::models::{
     Channel, ChannelsResponse, Episode, EpisodesResponse, Program, ProgramsResponse,
@@ -22,6 +24,12 @@ const SR_API_BASE: &str = "https://api.sr.se/api/v2";
 // API CLIENT STRUCT
 // ============================================================================
 
+/// Cached schedule data with timestamp
+struct ScheduleCache {
+    data: Option<ScheduleRightNowResponse>,
+    last_fetch: Option<Instant>,
+}
+
 /// The main API client that handles all requests to Sveriges Radio
 ///
 /// Uses a blocking HTTP client for simplicity. All methods are synchronous and should
@@ -29,6 +37,7 @@ const SR_API_BASE: &str = "https://api.sr.se/api/v2";
 #[derive(Clone)]
 pub struct SrApiClient {
     client: reqwest::blocking::Client, // The HTTP client that makes requests
+    schedule_cache: Arc<Mutex<ScheduleCache>>, // Cache schedule data (refreshed every 30 seconds)
 }
 
 // 'impl' blocks define methods (functions) for a struct
@@ -50,7 +59,13 @@ impl SrApiClient {
         info!("SR API client initialized");
 
         // 'Self' refers to the struct we're implementing (SrApiClient)
-        Ok(Self { client })
+        Ok(Self {
+            client,
+            schedule_cache: Arc::new(Mutex::new(ScheduleCache {
+                data: None,
+                last_fetch: None,
+            })),
+        })
     }
 
     /// Fetches all available Sveriges Radio channels
@@ -112,11 +127,26 @@ impl SrApiClient {
     /// }
     /// ```
     pub fn get_schedule_right_now(&self) -> Result<ScheduleRightNowResponse> {
+        // Check cache first (30 second TTL)
+        const CACHE_TTL: Duration = Duration::from_secs(30);
+
+        {
+            let cache = self.schedule_cache.lock().unwrap();
+            if let (Some(data), Some(last_fetch)) = (&cache.data, cache.last_fetch) {
+                if last_fetch.elapsed() < CACHE_TTL {
+                    debug!("Using cached schedule (age: {:.1}s)", last_fetch.elapsed().as_secs_f32());
+                    return Ok(data.clone());
+                }
+            }
+        }
+
+        // Cache miss or expired - fetch fresh data
         let url = format!(
             "{}/scheduledepisodes/rightnow?format=json&pagination=false",
             SR_API_BASE
         );
 
+        info!("Fetching fresh schedule from API (cache expired or empty)");
         debug!("Fetching current schedule from: {}", url);
 
         let response = self
@@ -133,6 +163,13 @@ impl SrApiClient {
             "Successfully fetched schedule for {} channels",
             schedule_response.channels.len()
         );
+
+        // Update cache
+        {
+            let mut cache = self.schedule_cache.lock().unwrap();
+            cache.data = Some(schedule_response.clone());
+            cache.last_fetch = Some(Instant::now());
+        }
 
         Ok(schedule_response)
     }
