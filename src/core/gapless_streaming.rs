@@ -545,7 +545,10 @@ impl GaplessPlayer {
             loop {
                 // Check if still current
                 if generation_check.load(Ordering::SeqCst) != generation {
-                    info!("Download task generation {} superseded, exiting", generation);
+                    info!(
+                        "Download task generation {} superseded, exiting",
+                        generation
+                    );
                     break;
                 }
 
@@ -792,7 +795,9 @@ impl GaplessPlayer {
                 }
                 Ok(Ok(None)) => {
                     // Stream ended without error - this might be unexpected disconnection
-                    error!("Stream ended unexpectedly (connection likely dropped) - will reconnect");
+                    error!(
+                        "Stream ended unexpectedly (connection likely dropped) - will reconnect"
+                    );
                     return Err(()); // Unexpected end, needs reconnect
                 }
                 Ok(Err(e)) => {
