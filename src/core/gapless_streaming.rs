@@ -537,21 +537,74 @@ impl GaplessPlayer {
 
             info!("Initial buffer sent successfully, continuing stream...");
 
-            // Stream remaining bytes continuously
-            let start_time = Instant::now();
-            Self::stream_chunks(
-                response,
-                generation,
-                &generation_check,
-                &mut command_rx,
-                &data_tx,
-                &stats,
-                &live_buffer,
-                &buffer_start_time,
-                &mut bytes_downloaded,
-                start_time,
-            )
-            .await;
+            // Stream with automatic reconnection on errors
+            let mut reconnect_count = 0;
+            const MAX_RECONNECTS: u32 = 10; // Allow multiple reconnection attempts
+
+            loop {
+                // Check if still current
+                if generation_check.load(Ordering::SeqCst) != generation {
+                    info!("Download task generation {} superseded, exiting", generation);
+                    break;
+                }
+
+                // Stream remaining bytes continuously
+                let start_time = Instant::now();
+                match Self::stream_chunks(
+                    response,
+                    generation,
+                    &generation_check,
+                    &mut command_rx,
+                    &data_tx,
+                    &stats,
+                    &live_buffer,
+                    &buffer_start_time,
+                    &mut bytes_downloaded,
+                    start_time,
+                )
+                .await
+                {
+                    Ok(()) => {
+                        // Normal stop (user stopped or generation changed)
+                        info!("Stream stopped normally");
+                        break;
+                    }
+                    Err(()) => {
+                        // Connection error - attempt reconnection
+                        reconnect_count += 1;
+                        if reconnect_count > MAX_RECONNECTS {
+                            error!(
+                                "Max reconnection attempts ({}) reached, giving up",
+                                MAX_RECONNECTS
+                            );
+                            break;
+                        }
+
+                        info!(
+                            "Connection lost, attempting reconnection {}/{}...",
+                            reconnect_count, MAX_RECONNECTS
+                        );
+
+                        // Wait a bit before reconnecting
+                        let reconnect_delay = Duration::from_millis(500 * reconnect_count as u64);
+                        tokio::time::sleep(reconnect_delay).await;
+
+                        // Reconnect
+                        let Some(new_response) =
+                            Self::connect_with_retry(&client, &url, generation, &generation_check)
+                                .await
+                        else {
+                            error!("Failed to reconnect");
+                            break;
+                        };
+
+                        info!("Reconnected successfully, resuming stream...");
+                        response = new_response;
+                        // Reset reconnect count on successful reconnection
+                        reconnect_count = 0;
+                    }
+                }
+            }
 
             info!("Download task finished");
         })
@@ -644,6 +697,7 @@ impl GaplessPlayer {
     }
 
     // Stream chunks continuously
+    // Returns Ok(()) if stopped normally, Err(()) if connection error (needs reconnect)
     #[allow(clippy::too_many_arguments)]
     async fn stream_chunks(
         mut response: reqwest::Response,
@@ -656,7 +710,7 @@ impl GaplessPlayer {
         buffer_start_time: &Arc<Mutex<Option<Instant>>>,
         bytes_downloaded: &mut usize,
         start_time: Instant,
-    ) {
+    ) -> Result<(), ()> {
         while let Some(chunk_result) = response.chunk().await.transpose() {
             // Check if still current generation
             if generation_check.load(Ordering::SeqCst) != generation {
@@ -664,13 +718,13 @@ impl GaplessPlayer {
                     "Download task generation {} superseded, exiting",
                     generation
                 );
-                break;
+                return Ok(()); // Normal stop
             }
 
             // Check for stop command (non-blocking)
             if let Ok(StreamCommand::Stop) = command_rx.try_recv() {
                 info!("Stop command received");
-                break;
+                return Ok(()); // Normal stop
             }
 
             match chunk_result {
@@ -697,15 +751,19 @@ impl GaplessPlayer {
 
                     // Send chunk to decoder
                     if data_tx.send(chunk).is_err() {
-                        break;
+                        return Ok(()); // Decoder stopped, normal exit
                     }
                 }
                 Err(e) => {
-                    error!("Error reading chunk: {}", e);
-                    break;
+                    error!("Error reading chunk: {} - will attempt reconnection", e);
+                    return Err(()); // Connection error, needs reconnect
                 }
             }
         }
+
+        // Stream ended naturally
+        info!("Stream ended");
+        Ok(())
     }
 
     // Spawn the decoder task
