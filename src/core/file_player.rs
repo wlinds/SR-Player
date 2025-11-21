@@ -5,158 +5,209 @@
 //
 // Architecture:
 // 1. Download entire file to memory
-// 2. Use rodio::Decoder with Cursor (supports seeking)
+// 2. Use Symphonia decoder with Cursor (supports MP3, AAC, and more)
 // 3. Rodio's Sink with seek support
 
+use crate::core::utils::audio_buffer_to_f32;
 use anyhow::{Context, Result};
 use bytes::Bytes;
 use log::info;
-use minimp3::{Decoder as Mp3Decoder, Frame};
 use rodio::{OutputStream, OutputStreamHandle, Sink, Source};
 use std::io::Cursor;
 use std::sync::Arc;
 use std::time::Duration;
+use symphonia::core::codecs::{DecoderOptions, CODEC_TYPE_NULL};
+use symphonia::core::errors::Error as SymphoniaError;
+use symphonia::core::formats::FormatOptions;
+use symphonia::core::io::MediaSourceStream;
+use symphonia::core::meta::MetadataOptions;
+use symphonia::core::probe::Hint;
 use tokio::sync::Mutex;
 
-// Custom MP3 source with fast byte-level seeking
-struct FastMp3Source {
-    decoder: Mp3Decoder<Cursor<Vec<u8>>>,
-    current_frame: Option<Frame>,
+// Custom audio source with fast byte-level seeking (supports MP3, AAC, etc)
+struct FastAudioSource {
+    decoder: Box<dyn symphonia::core::codecs::Decoder>,
+    format_reader: Box<dyn symphonia::core::formats::FormatReader>,
+    track_id: u32,
+    current_samples: Vec<f32>,
     sample_offset: usize,
+    sample_rate: u32,
+    channels: u16,
     // Fade-in to avoid clicking noise
     fade_in_samples: usize,
     samples_played: usize,
 }
 
-impl FastMp3Source {
+impl FastAudioSource {
     fn new(data: Vec<u8>, seek_seconds: f32) -> Result<Self> {
-        let file_size = data.len();
+        // Create media source from bytes
+        let cursor = Cursor::new(data.clone());
+        let mss = MediaSourceStream::new(Box::new(cursor), Default::default());
 
-        // First pass: scan first 50 frames to get average frame size and sample rate
-        let mut temp_decoder = Mp3Decoder::new(Cursor::new(data.clone()));
-        let first_frame = temp_decoder
-            .next_frame()
-            .context("Failed to decode first frame")?;
-        let sample_rate = first_frame.sample_rate as f32;
-        let channels = first_frame.channels;
+        // Probe the format (auto-detect MP3, AAC, etc)
+        let hint = Hint::new();
+        // Don't set extension - let Symphonia auto-detect
+
+        let format_opts = FormatOptions::default();
+        let metadata_opts = MetadataOptions::default();
+
+        let probed = symphonia::default::get_probe()
+            .format(&hint, mss, &format_opts, &metadata_opts)
+            .context("Failed to probe audio format")?;
+
+        let mut format_reader = probed.format;
+
+        // Find the first audio track
+        let track = format_reader
+            .tracks()
+            .iter()
+            .find(|t| t.codec_params.codec != CODEC_TYPE_NULL)
+            .context("No audio tracks found")?;
+
+        let track_id = track.id;
+        let codec_params = &track.codec_params;
+
+        let sample_rate = codec_params.sample_rate.context("Sample rate not found")? as u32;
+
+        let channels = codec_params.channels.context("Channels not found")?.count() as u16;
+
+        info!(
+            "Detected audio format: sample_rate={}, channels={}",
+            sample_rate, channels
+        );
 
         // Calculate fade-in duration: 8ms
-        let fade_in_samples = (sample_rate * 0.008) as usize * channels;
+        let fade_in_samples = (sample_rate as f32 * 0.008) as usize * channels as usize;
 
-        // Scan first 50 frames to estimate average frame size
-        let mut frame_count = 1; // We already decoded first frame
-        let max_sample_frames = 50;
+        // Create decoder for the track
+        let decoder_opts = DecoderOptions::default();
+        let mut decoder = symphonia::default::get_codecs()
+            .make(codec_params, &decoder_opts)
+            .context("Failed to create decoder")?;
 
-        while frame_count < max_sample_frames {
-            match temp_decoder.next_frame() {
-                Ok(_) => frame_count += 1,
-                Err(_) => break,
+        // If seeking is requested, try to seek (time-based seeking)
+        if seek_seconds > 0.0 {
+            let seek_to_ts = (seek_seconds * sample_rate as f32) as u64;
+
+            // Try to seek to the target timestamp
+            // Symphonia will handle frame alignment automatically
+            if let Err(e) = format_reader.seek(
+                symphonia::core::formats::SeekMode::Accurate,
+                symphonia::core::formats::SeekTo::TimeStamp {
+                    ts: seek_to_ts,
+                    track_id,
+                },
+            ) {
+                info!(
+                    "Seek not supported or failed: {}, starting from beginning",
+                    e
+                );
+            } else {
+                info!("Seeked to approximately {}s", seek_seconds);
             }
         }
 
-        // Estimate average bytes per frame
-        // After decoding N frames, we can estimate how many bytes were consumed
-        // Typical MP3 frame: 417-626 bytes at 128-192 kbps
-        let avg_bytes_per_frame = if frame_count > 0 {
-            // Rough estimate: first N frames should be near start of file
-            // For 128 kbps CBR MP3: ~417 bytes/frame
-            // For 192 kbps CBR MP3: ~626 bytes/frame
-            // Let's use a conservative 500 bytes/frame average
-            500
-        } else {
-            500
-        };
+        // Decode first packet to get initial samples
+        let mut current_samples = Vec::new();
 
-        // Calculate how many frames to skip
-        // MP3 frames are typically 26ms (1152 samples at 44.1kHz)
-        let samples_per_frame = 1152;
-        let frames_per_second = sample_rate / samples_per_frame as f32;
-        let target_frame = (seek_seconds * frames_per_second) as usize;
+        // Try to decode first packet
+        loop {
+            let packet = match format_reader.next_packet() {
+                Ok(packet) => packet,
+                Err(SymphoniaError::IoError(_)) => break,
+                Err(SymphoniaError::ResetRequired) => {
+                    decoder.reset();
+                    continue;
+                }
+                Err(e) => return Err(anyhow::anyhow!("Failed to read packet: {}", e)),
+            };
 
-        // Calculate approximate byte offset
-        let target_byte_pos = (target_frame * avg_bytes_per_frame).min(file_size - 1000) as u64;
+            // Only decode packets for our track
+            if packet.track_id() != track_id {
+                continue;
+            }
 
-        info!(
-            "Fast MP3 seek: seeking to {}s (frame ~{}, byte pos ~{})",
-            seek_seconds, target_frame, target_byte_pos
-        );
-
-        // Create new decoder starting from estimated position
-        // Slice the data from target position to allow minimp3 to sync
-        let seek_data = &data[target_byte_pos as usize..];
-        let mut decoder = Mp3Decoder::new(Cursor::new(seek_data.to_vec()));
-
-        // Sync to next valid frame (minimp3 handles this automatically)
-        let first_valid_frame = decoder
-            .next_frame()
-            .context("Failed to find valid frame after seek")?;
-
-        info!(
-            "Synced to valid MP3 frame at sample rate {}",
-            first_valid_frame.sample_rate
-        );
+            match decoder.decode(&packet) {
+                Ok(decoded) => {
+                    // Convert to f32 samples using shared utility
+                    current_samples = audio_buffer_to_f32(&decoded);
+                    break;
+                }
+                Err(SymphoniaError::DecodeError(e)) => {
+                    info!("Decode error (skipping): {}", e);
+                    continue;
+                }
+                Err(e) => return Err(anyhow::anyhow!("Failed to decode: {}", e)),
+            }
+        }
 
         Ok(Self {
             decoder,
-            current_frame: Some(first_valid_frame),
+            format_reader,
+            track_id,
+            current_samples,
             sample_offset: 0,
+            sample_rate,
+            channels,
             fade_in_samples,
             samples_played: 0,
         })
     }
 }
 
-impl Iterator for FastMp3Source {
-    type Item = i16;
+impl Iterator for FastAudioSource {
+    type Item = f32;
 
     fn next(&mut self) -> Option<Self::Item> {
         loop {
-            // Return samples from current frame
-            if let Some(frame) = &self.current_frame {
-                if self.sample_offset < frame.data.len() {
-                    let mut sample = frame.data[self.sample_offset];
+            // Return samples from current buffer
+            if self.sample_offset < self.current_samples.len() {
+                let mut sample = self.current_samples[self.sample_offset];
 
-                    // Apply fade-in to avoid clicking (linear fade over 8ms)
-                    if self.samples_played < self.fade_in_samples {
-                        let fade_factor = self.samples_played as f32 / self.fade_in_samples as f32;
-                        sample = (sample as f32 * fade_factor) as i16;
-                        self.samples_played += 1;
-                    }
-
-                    self.sample_offset += 1;
-                    return Some(sample);
+                // Apply fade-in to avoid clicking (linear fade over 8ms)
+                if self.samples_played < self.fade_in_samples {
+                    let fade_factor = self.samples_played as f32 / self.fade_in_samples as f32;
+                    sample *= fade_factor;
+                    self.samples_played += 1;
                 }
+
+                self.sample_offset += 1;
+                return Some(sample);
             }
 
-            // Load next frame
-            match self.decoder.next_frame() {
-                Ok(frame) => {
-                    self.current_frame = Some(frame);
+            // Load next packet
+            let packet = match self.format_reader.next_packet() {
+                Ok(packet) => packet,
+                Err(_) => return None,
+            };
+
+            // Only decode packets for our track
+            if packet.track_id() != self.track_id {
+                continue;
+            }
+
+            match self.decoder.decode(&packet) {
+                Ok(decoded) => {
+                    self.current_samples = audio_buffer_to_f32(&decoded);
                     self.sample_offset = 0;
                 }
-                Err(_) => return None,
+                Err(_) => continue,
             }
         }
     }
 }
 
-impl Source for FastMp3Source {
+impl Source for FastAudioSource {
     fn current_frame_len(&self) -> Option<usize> {
-        self.current_frame.as_ref().map(|f| f.data.len())
+        Some(self.current_samples.len())
     }
 
     fn channels(&self) -> u16 {
-        self.current_frame
-            .as_ref()
-            .map(|f| f.channels as u16)
-            .unwrap_or(2)
+        self.channels
     }
 
     fn sample_rate(&self) -> u32 {
-        self.current_frame
-            .as_ref()
-            .map(|f| f.sample_rate as u32)
-            .unwrap_or(44100)
+        self.sample_rate
     }
 
     fn total_duration(&self) -> Option<Duration> {
@@ -219,9 +270,15 @@ impl FilePlayer {
         }
     }
 
-    // Play from bytes at a specific position (FAST with minimp3!)
+    // Check if the sink has finished playing all queued audio
+    pub async fn is_finished(&self) -> bool {
+        let sink = self.sink.lock().await;
+        sink.empty()
+    }
+
+    // Play from bytes at a specific position (supports MP3, AAC, and more via Symphonia!)
     pub async fn play_from_bytes_at_position(&self, data: Bytes, position: f32) -> Result<()> {
-        info!("Fast seeking to {}s using minimp3", position);
+        info!("Fast seeking to {}s using Symphonia", position);
 
         // Store audio data for future seeks
         {
@@ -247,14 +304,14 @@ impl FilePlayer {
             }
         }
 
-        // Create fast MP3 source on blocking thread (frame skipping is fast!)
+        // Create fast audio source on blocking thread
         let data_vec = data.to_vec();
-        let source = tokio::task::spawn_blocking(move || FastMp3Source::new(data_vec, position))
+        let source = tokio::task::spawn_blocking(move || FastAudioSource::new(data_vec, position))
             .await
             .context("Spawn task failed")?
-            .context("Failed to create MP3 source")?;
+            .context("Failed to create audio source")?;
 
-        info!("MP3 source ready, starting playback at {}s", position);
+        info!("Audio source ready, starting playback at {}s", position);
 
         // Replace the entire sink to start fresh
         let sink = self.sink.lock().await;
@@ -265,7 +322,10 @@ impl FilePlayer {
         // Create new sink
         let new_sink = Sink::try_new(&self._stream_handle).context("Failed to create new sink")?;
         new_sink.set_volume(volume);
-        new_sink.append(source);
+
+        // Convert f32 samples to i16 for rodio compatibility
+        let source_converted = source.convert_samples::<i16>();
+        new_sink.append(source_converted);
         new_sink.play();
 
         let mut sink = self.sink.lock().await;

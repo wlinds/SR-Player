@@ -23,6 +23,9 @@
 // 6. Start periodic program update task
 // 7. Show window and run event loop
 
+// Hide console window on Windows in release builds
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 // MODULE DECLARATIONS
 // Like 'import' in Python or JavaScript
 // These tell Rust where to find our code modules
@@ -32,9 +35,10 @@ mod core; // This loads src/core/mod.rs
 // Like: from core.api import SrApiClient in Python
 // Or: import { SrApiClient } from './core/api' in JavaScript
 use core::api::SrApiClient;
+use core::channel_pool::ChannelPool;
 use core::episode_cache::EpisodeCache;
 use core::file_player_send_safe::SendSafeFilePlayer;
-use core::gapless_send_safe::SendSafeGaplessPlayer; // M3: Send-safe gapless streaming!
+use core::gapless_send_safe::SendSafeGaplessPlayer;
 use core::utils::{bytes_to_slint_image, fetch_image_bytes, parse_sr_date_to_time};
 
 // Import Slint types
@@ -163,33 +167,6 @@ macro_rules! setup_episode_fetcher {
                 }
             });
         });
-    }};
-}
-
-/// Macro for starting audio playback with UI updates
-macro_rules! start_playback {
-    ($player:expr, $url:expr, $ui_weak:expr) => {{
-        let player = $player.clone();
-        let ui_weak = $ui_weak.clone();
-        let url = $url;
-
-        async move {
-            match player.start_stream(url).await {
-                Ok(_) => {
-                    let _ = ui_weak.upgrade_in_event_loop(|ui| {
-                        ui.set_is_playing(true);
-                        ui.set_is_loading(false);
-                    });
-                }
-                Err(e) => {
-                    eprintln!("Failed to start stream: {}", e);
-                    let _ = ui_weak.upgrade_in_event_loop(|ui| {
-                        ui.set_is_playing(false);
-                        ui.set_is_loading(false);
-                    });
-                }
-            }
-        }
     }};
 }
 
@@ -336,7 +313,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize the logger (for debug/info messages)
     // RUST_LOG=debug cargo run to see debug logs
     // Like console.log() in JavaScript or print() in Python, but better
-    env_logger::init();
+    env_logger::Builder::from_default_env()
+        .filter_level(log::LevelFilter::Info) // Show INFO logs by default
+        .init();
 
     println!("Starting SR Player...");
 
@@ -364,13 +343,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create the API client (for fetching SR data)
     let api_client = SrApiClient::new()?;
 
-    // Create the Send-safe gapless streaming player (M3!)
-    // Uses dedicated audio thread to handle non-Send OutputStream
-    // Provides truly gapless playback with continuous AAC decoding via Symphonia
-    let streaming_player = Arc::new(SendSafeGaplessPlayer::new()?);
+    // Create multi-channel streaming pool
+    // Keeps up to 3 channels streaming in the background for instant switching
+    // ChannelPool is already Clone + Send + Sync, no need for Arc wrapper
+    let channel_pool = ChannelPool::new().expect("Failed to create channel pool");
 
     // Create episode cache for background downloads
     let episode_cache = EpisodeCache::new();
+
+    // Create streaming player for podcast instant playback
+    let streaming_player = Arc::new(SendSafeGaplessPlayer::new()?);
 
     // Create file player for seekable playback (when episode is downloaded)
     let file_player = Arc::new(SendSafeFilePlayer::new()?);
@@ -379,12 +361,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let current_episode_url: Arc<std::sync::Mutex<Option<String>>> =
         Arc::new(std::sync::Mutex::new(None));
 
-    // Track which player is active (true = file_player, false = streaming_player)
+    // Track which player is active (true = file_player, false = streaming/channel_pool)
     let using_file_player: Arc<std::sync::Mutex<bool>> = Arc::new(std::sync::Mutex::new(false));
 
     // Initialize volume to match UI default (0.5 = 50%)
     // Note: UI uses logarithmic scale, so 0.5 slider = 0.25 actual volume
-    streaming_player.set_volume(0.25);
+    runtime.block_on(async {
+        channel_pool.set_volume(0.25).await;
+    });
     file_player.set_volume(0.25);
 
     println!("Backend components initialized");
@@ -427,11 +411,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // JavaScript: const playerCopy = player;
     // Python: player_copy = player (but for closures)
 
-    // CALLBACK 1: When user selects a channel
+    // ========================================================================
+    // UI EVENT HANDLERS
+    // ========================================================================
+    // Each callback below handles a specific user interaction.
+    // The pattern is: clone state -> create closure -> register callback
+
+    // CALLBACK 1: Channel Selection Handler
+    // Triggered when user clicks on a radio channel
     {
         let ui_weak = ui.as_weak();
-        let player = streaming_player.clone();
+        let pool = channel_pool.clone();
         let file_player_clone = file_player.clone();
+        let streaming_player_clone = streaming_player.clone();
         let using_file_player_clone = using_file_player.clone();
         let runtime_handle = runtime.handle().clone();
         let api_client_clone = api_client.clone();
@@ -440,12 +432,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         ui.on_channel_selected(move |channel_id, stream_url| {
             println!("Channel selected: ID={}, URL={}", channel_id, stream_url);
-
-            // Stop file player if it's playing an episode
-            file_player_clone.stop();
-            if let Ok(mut using_file) = using_file_player_clone.lock() {
-                *using_file = false;
-            }
 
             // Store the current channel ID for periodic program updates
             if let Ok(mut current_id) = current_channel_id_clone.lock() {
@@ -471,11 +457,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let stream_url = stream_url.to_string();
             let ui_weak_clone = ui_weak.clone();
             let api_clone = api_client_clone.clone();
-            let player_clone = player.clone();
-            let runtime_clone = runtime_handle.clone();
+            let pool_clone = pool.clone();
+            let file_player_for_stop = file_player_clone.clone();
+            let streaming_player_for_stop = streaming_player_clone.clone();
+            let using_file_for_stop = using_file_player_clone.clone();
 
-            // Spawn async task for program info and gapless streaming
+            // Spawn async task to stop file player, fetch program info, and switch channel
             runtime_handle.spawn(async move {
+                // Stop both file player and streaming player (in case an episode is playing)
+                file_player_for_stop.stop();
+                streaming_player_for_stop.stop().await;
+                if let Ok(mut using_file) = using_file_for_stop.lock() {
+                    *using_file = false;
+                }
                 // Fetch and display current program information
                 if let Some(episode) = fetch_program_info_for_channel(&api_clone, channel_id).await
                 {
@@ -492,7 +486,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     });
                 }
 
-                runtime_clone.spawn(start_playback!(player_clone, stream_url, ui_weak_clone));
+                // Switch to the channel (instant if already in pool!)
+                let start = std::time::Instant::now();
+                match pool_clone.switch_to_channel(channel_id, stream_url).await {
+                    Ok(()) => {
+                        let elapsed = start.elapsed().as_millis();
+                        println!("Channel switch completed in {}ms", elapsed);
+
+                        let _ = ui_weak_clone.upgrade_in_event_loop(move |ui| {
+                            ui.set_is_playing(true);
+                            ui.set_is_loading(false);
+                            ui.set_is_live(true);
+                        });
+                    }
+                    Err(e) => {
+                        eprintln!("Failed to switch channel: {}", e);
+                        let _ = ui_weak_clone.upgrade_in_event_loop(move |ui| {
+                            ui.set_is_loading(false);
+                        });
+                    }
+                }
             });
         });
     }
@@ -500,9 +513,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // CALLBACK 2: Play/Pause button
     {
         let ui_weak = ui.as_weak();
-        let streaming_player_clone = streaming_player.clone();
+        let channel_pool_clone = channel_pool.clone();
         let file_player_clone = file_player.clone();
         let using_file_player_clone = using_file_player.clone();
+        let runtime_handle = runtime.handle().clone();
 
         ui.on_play_pause_clicked(move || {
             let ui_clone = ui_weak.upgrade().unwrap();
@@ -521,7 +535,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if is_using_file_player {
                     file_player_clone.pause();
                 } else {
-                    streaming_player_clone.pause();
+                    let pool = channel_pool_clone.clone();
+                    runtime_handle.spawn(async move {
+                        pool.pause().await;
+                    });
                 }
                 ui_clone.set_is_playing(false);
             } else {
@@ -533,7 +550,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     if is_using_file_player {
                         file_player_clone.resume();
                     } else {
-                        streaming_player_clone.resume();
+                        let pool = channel_pool_clone.clone();
+                        runtime_handle.spawn(async move {
+                            pool.resume().await;
+                        });
                     }
                     ui_clone.set_is_playing(true);
                 } else {
@@ -545,92 +565,386 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // CALLBACK 2b: Volume changed
     {
-        let streaming_player_clone = streaming_player.clone();
+        let channel_pool_clone = channel_pool.clone();
         let file_player_clone = file_player.clone();
+        let runtime_handle = runtime.handle().clone();
 
         ui.on_volume_changed(move |volume| {
-            streaming_player_clone.set_volume(volume);
+            let pool = channel_pool_clone.clone();
+            runtime_handle.spawn(async move {
+                pool.set_volume(volume).await;
+            });
             file_player_clone.set_volume(volume);
         });
     }
 
-    // CALLBACK 2c: Seek to position (works once episode is downloaded)
+    // CALLBACK 2c: Seek to position (works for episodes and live radio DVR)
     {
         let ui_weak = ui.as_weak();
         let episode_cache_clone = episode_cache.clone();
         let current_episode_url_clone = current_episode_url.clone();
-        let file_player_clone = file_player.clone();
         let streaming_player_clone = streaming_player.clone();
+        let file_player_clone = file_player.clone();
+        let channel_pool_clone = channel_pool.clone();
         let using_file_player_clone = using_file_player.clone();
         let runtime_handle = runtime.handle().clone();
 
         ui.on_seek_to_position(move |position| {
-            println!("Seeking to position: {:.1}s", position);
+            println!("=== SEEK CALLBACK TRIGGERED: position={:.1}s ===", position);
 
-            let episode_url_opt = {
-                current_episode_url_clone
-                    .lock()
-                    .ok()
-                    .and_then(|url| url.clone())
-            };
-
-            let Some(episode_url) = episode_url_opt else {
-                println!("No episode currently playing");
+            let Some(ui_handle) = ui_weak.upgrade() else {
+                println!("UI no longer available");
                 return;
             };
 
-            let cache_clone = episode_cache_clone.clone();
-            let player_clone = file_player_clone.clone();
-            let streaming_clone = streaming_player_clone.clone();
-            let using_file_clone = using_file_player_clone.clone();
-            let ui_clone = ui_weak.clone();
+            let playback_duration = ui_handle.get_playback_duration();
+            let program_duration = ui_handle.get_program_duration();
+            println!("playback_duration={:.1}, program_duration={:.1}", playback_duration, program_duration);
 
-            runtime_handle.spawn(async move {
-                // Check if episode is downloaded
-                if !cache_clone.is_downloaded(&episode_url).await {
-                    println!("Episode not downloaded yet, cannot seek");
-                    return;
-                }
+            let is_episode = playback_duration > 0.0;
+            let is_live_radio = program_duration > 0.0 && !is_episode;
 
-                // Get downloaded data
-                let Some(data) = cache_clone.get(&episode_url).await else {
-                    println!("Failed to get downloaded data");
+            println!("is_episode={}, is_live_radio={}", is_episode, is_live_radio);
+
+            if is_episode {
+                println!("Entering episode seek logic");
+                // Episode seeking (existing logic)
+                let episode_url_opt = {
+                    current_episode_url_clone
+                        .lock()
+                        .ok()
+                        .and_then(|url| url.clone())
+                };
+
+                let Some(episode_url) = episode_url_opt else {
+                    println!("No episode currently playing");
                     return;
                 };
 
-                // Stop both players immediately before seeking
-                streaming_clone.stop().await;
-                player_clone.stop();
+                let cache_clone = episode_cache_clone.clone();
+                let player_clone = file_player_clone.clone();
+                let streaming_clone = streaming_player_clone.clone();
+                let pool_clone = channel_pool_clone.clone();
+                let using_file_clone = using_file_player_clone.clone();
+                let ui_weak_clone = ui_weak.clone();
 
-                // Play from downloaded file at seek position
-                println!("Playing from downloaded file at {}s", position);
+                runtime_handle.spawn(async move {
+                    // Check if episode is downloaded
+                    if !cache_clone.is_downloaded(&episode_url).await {
+                        println!("Episode not downloaded yet, cannot seek");
+                        return;
+                    }
 
-                match player_clone
-                    .play_from_bytes_at_position(data, position)
-                    .await
-                {
-                    Ok(_) => {
-                        println!("Successfully seeked to {}s", position);
+                    // Get downloaded data
+                    let Some(data) = cache_clone.get(&episode_url).await else {
+                        println!("Failed to get downloaded data");
+                        return;
+                    };
 
-                        // Mark that we're now using file player
-                        if let Ok(mut using_file) = using_file_clone.lock() {
-                            *using_file = true;
+                    // Stop streaming player and channel pool (file player will handle its own stop in play_from_bytes_at_position)
+                    streaming_clone.stop().await;
+                    pool_clone.stop_all().await;
+
+                    // Play from downloaded file at seek position
+                    println!("Playing from downloaded file at {}s", position);
+
+                    match player_clone
+                        .play_from_bytes_at_position(data, position)
+                        .await
+                    {
+                        Ok(_) => {
+                            println!("Successfully seeked to {}s", position);
+
+                            // Mark that we're now using file player
+                            if let Ok(mut using_file) = using_file_clone.lock() {
+                                *using_file = true;
+                            }
+
+                            // Update UI
+                            let _ = ui_weak_clone.upgrade_in_event_loop(move |ui| {
+                                ui.set_playback_position(position);
+                                ui.set_is_playing(true);
+                            });
+                        }
+                        Err(e) => {
+                            eprintln!("Failed to seek: {}", e);
+                            let _ = ui_weak_clone.upgrade_in_event_loop(|ui| {
+                                ui.set_is_loading(false);
+                            });
+                        }
+                    }
+                });
+            } else if is_live_radio {
+                // Live radio DVR seeking (hybrid approach)
+                // Switch to file player for time-shifted playback while keeping live stream running
+                let pool_clone2 = channel_pool_clone.clone();
+                let file_player_clone2 = file_player_clone.clone();
+                let using_file_clone2 = using_file_player_clone.clone();
+
+                // Get program info before spawning (while we have ui_handle)
+                let program_duration = ui_handle.get_program_duration();
+                let current_live_position = ui_handle.get_playback_position();
+                let program = ui_handle.get_current_program();
+
+                // Clone weak reference for async task
+                let ui_weak_clone = ui_weak.clone();
+
+                runtime_handle.spawn(async move {
+                    println!("Seeking in live radio DVR buffer to program position {}s", position);
+
+                    if program_duration == 0.0 {
+                        println!("No program duration available, cannot seek");
+                        return;
+                    }
+
+                    // DVR LOGIC:
+                    // - Single buffer continuously tracks live edge (last 30 minutes)
+                    // - We can seek anywhere within that 30-minute window
+                    // - Track state (live vs time-shifted) for UI indicators
+
+                    // Detect seek direction relative to live edge
+                    let seeking_to_live = position >= (program_duration - 5.0);
+
+                    // Update state based on seek direction
+                    if seeking_to_live {
+                        pool_clone2.set_at_live_edge(true).await;
+                    } else {
+                        pool_clone2.set_at_live_edge(false).await;
+                    }
+
+                    // Get buffer time range (time since we started recording)
+                    let (buffer_oldest, buffer_newest) = pool_clone2.get_buffer_time_range().await;
+                    let buffer_depth = buffer_newest - buffer_oldest;
+
+                    println!("Buffer range: {:.1}s - {:.1}s (depth: {:.1}s)", buffer_oldest, buffer_newest, buffer_depth);
+                    println!("Program duration: {:.1}s, current position: {:.1}s", program_duration, current_live_position);
+
+                    // KEY INSIGHT: The DVR buffer only contains audio from when we started listening!
+                    // We can't seek to arbitrary positions in the program that happened before we tuned in.
+                    //
+                    // The buffer continuously records as time advances. At any moment:
+                    // - program_duration = current live position in the show (keeps increasing)
+                    // - buffer contains the last buffer_depth seconds of audio
+                    // - We can seek within [program_duration - buffer_depth, program_duration]
+                    //
+                    // However, we need to get the CURRENT live position, not the snapshot from when callback started.
+                    // The periodic update task updates program_duration every 30 seconds, but it may be stale.
+                    // For seeking, we should recalculate the current live position based on wall clock time.
+
+                    // Recalculate current live position using the same logic as update_live_position
+                    let current_live_pos = if !program.start_time.is_empty() && !program.end_time.is_empty() {
+                        // Parse and calculate current position
+                        let parse_time = |time_str: &str| -> Option<(i32, i32)> {
+                            let parts: Vec<&str> = time_str.split(':').collect();
+                            if parts.len() == 2 {
+                                let hours = parts[0].parse::<i32>().ok()?;
+                                let minutes = parts[1].parse::<i32>().ok()?;
+                                Some((hours, minutes))
+                            } else {
+                                None
+                            }
+                        };
+
+                        if let (Some((start_h, start_m)), Some((end_h, end_m))) =
+                            (parse_time(&program.start_time), parse_time(&program.end_time)) {
+
+                            use chrono::Timelike;
+                            let now = chrono::Local::now();
+                            let current_h = now.hour() as i32;
+                            let current_m = now.minute() as i32;
+                            let current_s = now.second() as i32;
+
+                            let start_minutes = start_h * 60 + start_m;
+                            let mut end_minutes = end_h * 60 + end_m;
+                            if end_minutes < start_minutes {
+                                end_minutes += 24 * 60;
+                            }
+                            let current_minutes = current_h * 60 + current_m;
+
+                            let mut position = (current_minutes - start_minutes) as f32 * 60.0 + current_s as f32;
+                            if position < 0.0 {
+                                position += 24.0 * 60.0 * 60.0;
+                            }
+                            let duration = (end_minutes - start_minutes) as f32 * 60.0;
+                            position.max(0.0).min(duration)
+                        } else {
+                            program_duration  // Fallback to UI value
+                        }
+                    } else {
+                        program_duration  // Fallback to UI value
+                    };
+
+                    let seekable_start = current_live_pos - buffer_depth;
+                    let seekable_end = current_live_pos;  // Can seek up to current live edge
+
+                    println!("Seekable range: {:.1}s - {:.1}s (live position: {:.1}s, buffer depth: {:.1}s)",
+                             seekable_start, seekable_end, current_live_pos, buffer_depth);
+
+                    // Clamp position to seekable range
+                    let clamped_position = if position < seekable_start {
+                        println!("Requested position {:.1}s is before the buffered range (starts at {:.1}s)",
+                                 position, seekable_start);
+                        println!("Seeking to earliest available position: {:.1}s", seekable_start);
+                        seekable_start
+                    } else if position > seekable_end {
+                        println!("Requested position {:.1}s is beyond the live edge (at {:.1}s)",
+                                 position, seekable_end);
+                        println!("Seeking to live edge: {:.1}s", seekable_end);
+                        seekable_end
+                    } else {
+                        position
+                    };
+
+                    // Calculate buffer offset from the current live edge
+                    // The buffer's newest position corresponds to current_live_pos (live edge)
+                    // Special case: if we clamped to seekable_start, use buffer_oldest directly
+                    let seconds_back = current_live_pos - clamped_position;
+                    let clamped_buffer_position = if (clamped_position - seekable_start).abs() < 0.1 {
+                        // We clamped to the earliest position, so use buffer_oldest
+                        buffer_oldest
+                    } else {
+                        // Normal case: calculate from live edge
+                        buffer_newest - seconds_back
+                    };
+
+                    println!("Seeking to program position: {:.1}s (buffer position: {:.1}s, {:.1}s back from live)",
+                             clamped_position, clamped_buffer_position, seconds_back);
+
+                    // Check if seeking to live edge (within 5 seconds)
+                    let seeking_to_live = (buffer_newest - clamped_buffer_position).abs() < 5.0;
+
+                    if seeking_to_live {
+                        println!("Seeking to live edge (position: {:.1}s) - resuming live stream", clamped_position);
+
+                        // Switch back to live streaming
+                        file_player_clone2.stop();
+                        pool_clone2.resume().await;
+
+                        if let Ok(mut using_file) = using_file_clone2.lock() {
+                            *using_file = false;
                         }
 
-                        // Update UI
-                        let _ = ui_clone.upgrade_in_event_loop(move |ui| {
-                            ui.set_playback_position(position);
+                        // Set position to current live position
+                        let _ = ui_weak_clone.upgrade_in_event_loop(move |ui| {
+                            ui.set_playback_position(clamped_position);
                             ui.set_is_playing(true);
+                            ui.set_is_live(true);
                         });
-                    }
-                    Err(e) => {
-                        eprintln!("Failed to seek: {}", e);
+                    } else {
+                        println!("Seeking to program position {:.1}s (buffer position {:.1}s) - switching to time-shifted playback",
+                                 clamped_position, clamped_buffer_position);
 
-                        // Resume streaming as fallback
-                        streaming_clone.resume();
+                        // Get buffered data from the DVR using buffer time
+                        let buffer_data = pool_clone2.get_buffer_data_from_offset(clamped_buffer_position).await;
+
+                        match buffer_data {
+                            Ok(data) if !data.is_empty() => {
+                                println!("Got buffer data: {} bytes", data.len());
+
+                                // Stop any previous time-shifted playback before starting new one
+                                file_player_clone2.stop();
+
+                                // Pause live stream (keep downloading but pause audio output)
+                                pool_clone2.pause().await;
+
+                                // Play buffered data from the seek position using file player
+                                // NOTE: The data we got already starts at clamped_buffer_position,
+                                // so we play from the beginning of this data (offset 0.0)
+                                println!("Playing buffered data starting from buffer position {:.1}s (program position {:.1}s)",
+                                         clamped_buffer_position, clamped_position);
+
+                                match file_player_clone2.play_from_bytes_at_position(bytes::Bytes::from(data), 0.0).await {
+                                    Ok(_) => {
+                                        println!("Time-shifted playback started at program position {:.1}s", clamped_position);
+
+                                        if let Ok(mut using_file) = using_file_clone2.lock() {
+                                            *using_file = true;
+                                        }
+
+                                        let _ = ui_weak_clone.upgrade_in_event_loop(move |ui| {
+                                            ui.set_playback_position(clamped_position);
+                                            ui.set_is_playing(true);
+                                            ui.set_is_live(false);
+                                        });
+
+                                        // Spawn a task to monitor when the buffered audio finishes
+                                        // and automatically switch back to live streaming
+                                        let file_player_monitor = file_player_clone2.clone();
+                                        let pool_monitor = pool_clone2.clone();
+                                        let using_file_monitor = using_file_clone2.clone();
+                                        let ui_weak_monitor = ui_weak_clone.clone();
+
+                                        tokio::spawn(async move {
+                                            // Wait a bit before starting to check
+                                            tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+
+                                            // Check every 100ms if the file player has finished
+                                            loop {
+                                                tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+
+                                                // Check if we're still using file player
+                                                let still_using_file = {
+                                                    if let Ok(using_file) = using_file_monitor.lock() {
+                                                        *using_file
+                                                    } else {
+                                                        break;
+                                                    }
+                                                };
+
+                                                if !still_using_file {
+                                                    // User manually switched back to live or stopped
+                                                    break;
+                                                }
+
+                                                // Check if the file player's sink is empty (finished playing)
+                                                if file_player_monitor.is_finished().await {
+                                                    println!("Time-shifted playback finished - automatically switching back to live");
+
+                                                    // Switch back to live streaming
+                                                    file_player_monitor.stop();
+                                                    pool_monitor.resume().await;
+
+                                                    if let Ok(mut using_file) = using_file_monitor.lock() {
+                                                        *using_file = false;
+                                                    }
+
+                                                    // Update UI to show we're back at live
+                                                    let _ = ui_weak_monitor.upgrade_in_event_loop(move |ui| {
+                                                        ui.set_is_live(true);
+                                                        ui.set_is_playing(true);
+                                                    });
+
+                                                    break;
+                                                }
+                                            }
+                                        });
+                                    }
+                                    Err(e) => {
+                                        eprintln!("Failed to start time-shifted playback: {}", e);
+                                        eprintln!("Falling back to live stream");
+                                        pool_clone2.resume().await;
+
+                                        // Update UI to show we're back at live
+                                        let _ = ui_weak_clone.upgrade_in_event_loop(move |ui| {
+                                            ui.set_playback_position(program_duration);
+                                            ui.set_is_playing(true);
+                                            ui.set_is_live(true);
+                                        });
+                                    }
+                                }
+                            }
+                            Ok(_) => {
+                                println!("No buffered data available");
+                                pool_clone2.resume().await;
+                            }
+                            Err(e) => {
+                                eprintln!("Failed to get buffer data: {}", e);
+                                pool_clone2.resume().await;
+                            }
+                        }
                     }
-                }
-            });
+                });
+            }
         });
     }
 
@@ -677,6 +991,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let now = chrono::Local::now();
             let current_h = now.hour() as i32;
             let current_m = now.minute() as i32;
+            let current_s = now.second() as i32;
 
             // Calculate times in minutes since midnight
             let start_minutes = start_h * 60 + start_m;
@@ -691,7 +1006,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             // Calculate position and duration
             let duration = (end_minutes - start_minutes) as f32 * 60.0; // seconds
-            let mut position = (current_minutes - start_minutes) as f32 * 60.0; // seconds
+            let mut position = (current_minutes - start_minutes) as f32 * 60.0 + current_s as f32; // seconds (include seconds!)
 
             // Handle case where current time is after midnight but program started before
             if position < 0.0 {
@@ -753,6 +1068,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // CALLBACK 6: Episode selected for playback
     {
         let ui_weak = ui.as_weak();
+        let channel_pool_clone = channel_pool.clone();
         let streaming_player_clone = streaming_player.clone();
         let file_player_clone = file_player.clone();
         let episode_cache_clone = episode_cache.clone();
@@ -763,22 +1079,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let current_channel_id_clone = current_channel_id.clone();
 
         ui.on_episode_selected(move |episode_id| {
-            // Stop both players before starting new episode
-            let streaming_clone = streaming_player_clone.clone();
-            let file_clone = file_player_clone.clone();
-            let using_file_clone = using_file_player_clone.clone();
-            let runtime = runtime_handle.clone();
-
-            runtime.spawn(async move {
-                streaming_clone.stop().await;
-                file_clone.stop();
-
-                // Reset player tracking flag
-                if let Ok(mut using_file) = using_file_clone.lock() {
-                    *using_file = false;
-                }
-            });
-
             // Stop live program polling
             if let Ok(mut current_id) = current_channel_id_clone.lock() {
                 *current_id = None;
@@ -806,6 +1106,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             });
 
             // Set playback duration (in seconds)
+            println!("Setting playback_duration to: {} seconds", episode.duration);
             ui.set_playback_duration(episode.duration as f32);
             ui.set_playback_position(0.0);
             ui.set_program_duration(0.0); // Clear program duration (this is an episode, not live)
@@ -844,7 +1145,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 });
             }
 
-            // Start playback using streaming player (fast loading)
             let url = episode.url.to_string();
 
             // Store current episode URL
@@ -852,32 +1152,78 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 *current_url = Some(url.clone());
             }
 
-            // Start background download for seeking with progress tracking
-            let ui_clone_for_progress = ui_weak.clone();
-            episode_cache_clone.start_download(url.clone(), move |downloaded, total| {
-                let percent = if total > 0 {
-                    (downloaded as f64 / total as f64 * 100.0) as i32
-                } else {
-                    0
-                };
+            // Stop both players, then start new episode playback
+            let pool_clone = channel_pool_clone.clone();
+            let file_clone = file_player_clone.clone();
+            let streaming_for_stop = streaming_player_clone.clone();
+            let streaming_for_playback = streaming_player_clone.clone();
+            let using_file_clone = using_file_player_clone.clone();
+            let episode_cache_for_download = episode_cache_clone.clone();
+            let ui_weak_for_download = ui_weak.clone();
+            let ui_weak_for_playback = ui_weak.clone();
+            let url_for_download = url.clone();
+            let url_for_playback = url.clone();
 
-                let ui_for_clear = ui_clone_for_progress.clone();
-                let _ = ui_clone_for_progress.upgrade_in_event_loop(move |ui| {
-                    if downloaded >= total && total > 0 {
-                        ui.set_download_status("Downloaded (100%)".into());
-                        // Clear after 2 seconds
-                        slint::Timer::single_shot(std::time::Duration::from_secs(2), move || {
-                            let _ = ui_for_clear.upgrade_in_event_loop(|ui| {
-                                ui.set_download_status("".into());
-                            });
+            runtime_handle.spawn(async move {
+                // Stop all players first
+                pool_clone.stop_all().await;
+                file_clone.stop();
+                streaming_for_stop.stop().await;
+
+                // Reset player tracking flag
+                if let Ok(mut using_file) = using_file_clone.lock() {
+                    *using_file = false;
+                }
+
+                // Start background download for seeking with progress tracking
+                episode_cache_for_download.start_download(
+                    url_for_download,
+                    move |downloaded, total| {
+                        let percent = if total > 0 {
+                            (downloaded as f64 / total as f64 * 100.0) as i32
+                        } else {
+                            0
+                        };
+
+                        let ui_for_clear = ui_weak_for_download.clone();
+                        let _ = ui_weak_for_download.upgrade_in_event_loop(move |ui| {
+                            if downloaded >= total && total > 0 {
+                                ui.set_download_status("Downloaded (100%)".into());
+                                // Clear after 2 seconds
+                                slint::Timer::single_shot(
+                                    std::time::Duration::from_secs(2),
+                                    move || {
+                                        let _ = ui_for_clear.upgrade_in_event_loop(|ui| {
+                                            ui.set_download_status("".into());
+                                        });
+                                    },
+                                );
+                            } else {
+                                ui.set_download_status(
+                                    format!("Downloading ({}%)", percent).into(),
+                                );
+                            }
                         });
-                    } else {
-                        ui.set_download_status(format!("Downloading ({}%)", percent).into());
-                    }
-                });
-            });
+                    },
+                );
 
-            runtime_handle.spawn(start_playback!(streaming_player_clone, url, ui_weak));
+                // Start streaming playback (after stop completes)
+                match streaming_for_playback.start_stream(url_for_playback).await {
+                    Ok(_) => {
+                        let _ = ui_weak_for_playback.upgrade_in_event_loop(|ui| {
+                            ui.set_is_playing(true);
+                            ui.set_is_loading(false);
+                        });
+                    }
+                    Err(e) => {
+                        eprintln!("Failed to start stream: {}", e);
+                        let _ = ui_weak_for_playback.upgrade_in_event_loop(|ui| {
+                            ui.set_is_playing(false);
+                            ui.set_is_loading(false);
+                        });
+                    }
+                }
+            });
         });
     }
 
@@ -927,7 +1273,70 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     }
 
+    // CALLBACK 10: Window dragging (for frameless window)
+    {
+        let ui_weak = ui.as_weak();
+
+        ui.on_window_moved(move |delta_x, delta_y| {
+            if let Some(ui_handle) = ui_weak.upgrade() {
+                let window = ui_handle.window();
+                let logical_pos = window.position().to_logical(window.scale_factor());
+                window.set_position(slint::LogicalPosition::new(
+                    logical_pos.x + delta_x,
+                    logical_pos.y + delta_y,
+                ));
+            }
+        });
+    }
+
     println!("UI callbacks configured");
+
+    // ========================================================================
+    // PERIODIC DVR BUFFER UPDATE TASK
+    // ========================================================================
+
+    // Spawn a background task to update DVR buffer depth and live status
+    // This runs every 2 seconds to keep the UI updated
+    // TODO: Re-enable DVR buffer depth when channel pool supports DVR
+    /* DISABLED FOR NOW - DVR features need to be integrated with channel pool
+    {
+        let ui_weak = ui.as_weak();
+        let channel_pool_clone = channel_pool.clone();
+        let current_channel_id_clone = current_channel_id.clone();
+        let runtime_handle = runtime.handle().clone();
+
+        runtime_handle.spawn(async move {
+            loop {
+                // Wait 2 seconds between updates
+                tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+
+                // Only update if a channel is playing
+                let is_channel_playing = {
+                    let current_id = current_channel_id_clone.lock().unwrap();
+                    current_id.is_some()
+                };
+
+                if is_channel_playing {
+                    // Get buffer depth
+                    let buffer_depth = streaming_player_clone.get_buffer_depth().await;
+
+                    // Update UI
+                    let _ = ui_weak.upgrade_in_event_loop(move |ui| {
+                        // Only update for live radio (not episodes)
+                        if ui.get_playback_duration() == 0.0 && ui.get_program_duration() > 0.0 {
+                            ui.set_buffer_depth(buffer_depth);
+
+                            // Don't modify is_live here - it's managed by the seek logic
+                            // The Timer will call update_live_position() when is_live is true
+                        }
+                    });
+                }
+            }
+        });
+    }
+    */ // END DISABLED DVR BUFFER UPDATE
+
+    // println!("DVR buffer update task started");  // Disabled with DVR features
 
     // ========================================================================
     // PERIODIC PROGRAM UPDATE TASK

@@ -38,6 +38,7 @@ export component MainWindow inherits Window {
     // WINDOW PROPERTIES
     // ================================================================
     title: "SR Player - Sveriges Radio";
+    // no-frame: true;
     min-width: 300px;
     min-height: 300px;
     preferred-width: 360px;
@@ -52,11 +53,19 @@ export component MainWindow inherits Window {
         interval: 1s;
         running: is-playing && (playback-duration > 0 || current-program.start-time != "");
         triggered => {
-            // For episodes: check against playback-duration
-            // For live radio: check against program-duration
-            if ((playback-duration > 0 && playback-position < playback-duration) ||
-                (playback-duration == 0 && playback-position < program-duration)) {
+            // For episodes: increment position directly
+            if (playback-duration > 0 && playback-position < playback-duration) {
                 playback-position += 1.0;
+            }
+            // For live radio at live edge: call Rust callback to calculate position based on current time
+            else if (playback-duration == 0 && is-live && current-program.start-time != "") {
+                update-live-position();
+            }
+            // For time-shifted playback (live radio but not at live edge): increment position
+            else if (playback-duration == 0 && !is-live && program-duration > 0) {
+                if (playback-position < program-duration) {
+                    playback-position += 1.0;
+                }
             }
         }
     }
@@ -74,6 +83,8 @@ export component MainWindow inherits Window {
     in-out property <float> playback-duration: 0.0;     // Total duration in seconds (episodes)
     in-out property <float> program-duration: 0.0;      // Total duration in seconds (live radio programs)
     in-out property <string> download-status: "";       // Download status message
+    in-out property <float> buffer-depth: 0.0;          // DVR buffer depth in seconds
+    in-out property <bool> is-live: true;               // True if at live edge, false if time-shifted
     in-out property <ProgramInfo> current-program: {
         title: "",
         description: "",
@@ -128,13 +139,44 @@ export component MainWindow inherits Window {
 
     // Pagination (if needed)
     callback load-more-programs();
+    callback window-moved(length, length);  // Callback for window dragging
 
     // ================================================================
     // MAIN LAYOUT
     // ================================================================
-    VerticalBox {
-        padding: 0px;
-        spacing: 0px;
+    // WINDOW DRAGGING (for frameless window)
+    // ================================================================
+    TouchArea {
+        width: 100%;
+        height: 100%;
+
+        moved => {
+            if (self.pressed) {
+                root.window-moved(self.mouse-x - self.pressed-x, self.mouse-y - self.pressed-y);
+            }
+        }
+    }
+
+    // ================================================================
+    FocusScope {
+        enabled: true;
+
+        key-pressed(event) => {
+            // Space bar toggles play/pause
+            if (event.text == " ") {
+                root.play-pause-clicked();
+                return accept;
+            }
+            return reject;
+        }
+
+        init => {
+            self.focus();
+        }
+
+        VerticalBox {
+            padding: 0px;
+            spacing: 0px;
 
         // ================================================================
         // NOW PLAYING SECTION
@@ -144,6 +186,8 @@ export component MainWindow inherits Window {
             is-playing: root.is-playing;
             is-loading: root.is-loading;
             current-program: root.current-program;
+            is-live: root.is-live;
+            playback-duration: root.playback-duration;
 
             browse-podcasts-clicked(program-id) => {
                 root.browse-podcasts-clicked(program-id);
@@ -163,42 +207,91 @@ export component MainWindow inherits Window {
                 padding: 0px;
                 vertical-stretch: 0;
 
-                // Progress bar background
+                // Progress bar background with larger hit area
                 Rectangle {
                     height: 4px;
-                    background: #1a1a1a;
-                    border-radius: 0px;
 
-                    // Filled portion (anchored to left)
+                    // Actual visual progress bar
                     Rectangle {
-                        x: 0px;
-                        y: 0px;
-                        width: {
-                            if (playback-duration > 0) {
-                                // Episode: position / duration
-                                parent.width * (playback-position / playback-duration)
-                            } else if (program-duration > 0) {
-                                // Live radio: position / program duration
-                                parent.width * (playback-position / program-duration)
-                            } else {
-                                // No duration info, show nothing
-                                0px
-                            }
-                        };
-                        height: parent.height;
-                        background: #EFA669;
+                        y: 0px; 
+                        height: 4px;
+                        width: parent.width;
+                        background: #1a1a1a;
                         border-radius: 0px;
+
+                        // Filled portion (anchored to left)
+                        Rectangle {
+                            x: 0px;
+                            y: 0px;
+                            width: {
+                                if (playback-duration > 0) {
+                                    // Episode: position / duration
+                                    parent.width * (playback-position / playback-duration)
+                                } else if (program-duration > 0) {
+                                    // Live radio: position / program duration
+                                    parent.width * (playback-position / program-duration)
+                                } else {
+                                    // No duration info, show nothing
+                                    0px
+                                }
+                            };
+                            height: parent.height;
+                            background: #EFA669;
+                            border-radius: 0px;
+                        }
                     }
 
-                    // Touch area for seeking (only for episodes with duration > 0)
-                    if playback-duration > 0: TouchArea {
+                    // Touch area for seeking (episodes OR live radio with DVR buffer)
+                    if playback-duration > 0 || program-duration > 0: TouchArea {
                         width: 100%;
-                        height: 100%;
+                        height: 100%;  // Now covers the full 20px height
                         mouse-cursor: pointer;
 
+                        property <float> hover-position: (self.mouse-x / self.width) *
+                            (playback-duration > 0 ? playback-duration : program-duration);
+                        property <length> tooltip-x: clamp(self.mouse-x - 30px, 0px, self.width - 60px);
+
                         clicked => {
-                            root.playback-position = (self.mouse-x / self.width) * playback-duration;
-                            root.seek-to-position(root.playback-position);
+                            debug("TouchArea clicked!");
+                            debug("playback-duration:", playback-duration);
+                            debug("program-duration:", program-duration);
+                            if playback-duration > 0 {
+                                // Episode seeking
+                                let position = (self.mouse-x / self.width) * playback-duration;
+                                debug("Episode seek to position:", position);
+                                root.playback-position = position;
+                                root.seek-to-position(position);
+                            } else if program-duration > 0 {
+                                // Live radio DVR seeking
+                                let position = (self.mouse-x / self.width) * program-duration;
+                                debug("Live radio seek to position:", position);
+                                root.playback-position = position;
+                                root.seek-to-position(position);
+                            }
+                        }
+
+                        // Hover tooltip showing time at cursor position
+                        if self.has-hover: Rectangle {
+                            x: tooltip-x;
+                            y: -30px;
+                            width: 60px;
+                            height: 24px;
+                            background: #000000;
+                            border-radius: 4px;
+                            border-width: 1px;
+                            border-color: #444444;
+
+                            Text {
+                                text: {
+                                    let minutes = Math.floor(hover-position / 60);
+                                    let seconds = Math.floor(Math.mod(hover-position, 60));
+                                    minutes + ":" + (seconds < 10 ? "0" : "") + seconds
+                                };
+                                color: #ffffff;
+                                font-size: 11px;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
                         }
                     }
                 }
@@ -312,37 +405,44 @@ export component MainWindow inherits Window {
                         font-size: 14px;
                     }
 
-                    // Volume slider with subtle grey accent
+                    // Volume slider wrapper for vertical centering
                     Rectangle {
                         horizontal-stretch: 1;
-                        height: 4px;
-                        background: #2a2a2a;
-                        border-radius: 2px;
+                        vertical-stretch: 1;
 
-                        // Filled portion (anchored to left)
+                        // Volume slider with subtle grey accent
                         Rectangle {
-                            x: 0px;
-                            y: 0px;
-                            width: parent.width * root.volume;
-                            height: parent.height;
-                            background: #666666;
-                            border-radius: 2px;
-                        }
-
-                        // Touch area for interaction
-                        TouchArea {
+                            height: 4px;
                             width: parent.width;
-                            height: parent.height;
+                            y: (parent.height - self.height) / 2;
+                            background: #2a2a2a;
+                            border-radius: 2px;
 
-                            clicked => {
-                                root.volume = self.mouse-x / self.width;
-                                root.volume-changed(root.volume * root.volume);
+                            // Filled portion (anchored to left)
+                            Rectangle {
+                                x: 0px;
+                                y: 0px;
+                                width: parent.width * root.volume;
+                                height: parent.height;
+                                background: #666666;
+                                border-radius: 2px;
                             }
 
-                            moved => {
-                                if (self.pressed) {
-                                    root.volume = clamp(self.mouse-x / self.width, 0, 1);
+                            // Touch area for interaction
+                            TouchArea {
+                                width: parent.width;
+                                height: parent.height;
+
+                                clicked => {
+                                    root.volume = self.mouse-x / self.width;
                                     root.volume-changed(root.volume * root.volume);
+                                }
+
+                                moved => {
+                                    if (self.pressed) {
+                                        root.volume = clamp(self.mouse-x / self.width, 0, 1);
+                                        root.volume-changed(root.volume * root.volume);
+                                    }
                                 }
                             }
                         }
@@ -483,13 +583,14 @@ export component MainWindow inherits Window {
             }
         }
 
-            // Music Tab - Placeholder using TabContent
-            if current-tab == 3: TabContent {
-                show-simple-text: true;
-                simple-text: "Music content coming soon...";
-                simple-text-color: #888888;
-                is-loaded: true;
-            }
+        // Music Tab - Placeholder using TabContent
+        if current-tab == 3: TabContent {
+            show-simple-text: true;
+            simple-text: "Music content coming soon...";
+            simple-text-color: #888888;
+            is-loaded: true;
         }
-    }
+        } // end tab navigation VerticalBox
+    } // end main VerticalBox
+    } // end FocusScope
 }
