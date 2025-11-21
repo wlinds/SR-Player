@@ -30,6 +30,7 @@ jobs:
             target: x86_64-pc-windows-msvc
             artifact_name: sr-player-windows.zip
             asset_name: sr-player-${{ github.ref_name }}-windows.zip
+            msi_name: sr-player-${{ github.ref_name }}-setup.msi
 
     steps:
     - name: Checkout code
@@ -67,9 +68,17 @@ jobs:
       if: matrix.os == 'ubuntu-latest'
       run: cargo build --release
 
+    - name: Install cargo-wix (Windows only)
+      if: matrix.os == 'windows-latest'
+      run: cargo install cargo-wix
+
     - name: Build Windows binary
       if: matrix.os == 'windows-latest'
       run: cargo build --release
+
+    - name: Build Windows MSI installer
+      if: matrix.os == 'windows-latest'
+      run: cargo wix --nocapture
 
     - name: Package macOS
       if: matrix.os == 'macos-latest'
@@ -95,6 +104,9 @@ jobs:
         cp README.md package/
         cd package
         7z a "../sr-player-${{ github.ref_name }}-windows.zip" *
+        cd ..
+        # Copy MSI installer to root for upload
+        cp target/wix/*.msi "sr-player-${{ github.ref_name }}-setup.msi"
 
     - name: Upload artifact
       uses: actions/upload-artifact@v4
@@ -104,6 +116,7 @@ jobs:
           SR-Player-${{ github.ref_name }}-macos.zip
           sr-player-${{ github.ref_name }}-linux.tar.gz
           sr-player-${{ github.ref_name }}-windows.zip
+          sr-player-${{ github.ref_name }}-setup.msi
 
   create-release:
     name: Create Release
@@ -123,9 +136,11 @@ jobs:
           A fast and lightweight desktop app for streaming Sveriges Radio live channels and podcasts.
 
           ### Features
-          - Stream all Sveriges Radio live channels
-          - Browse and play podcast episodes
+          - Stream all Sveriges Radio live channels with instant switching
+          - Browse and play podcast episodes with caching
+          - DVR buffer for time-shifted playback (rewind live radio)
           - Gapless audio playback with Symphonia decoder
+          - Multi-channel background streaming pool
           - Real-time "Now Playing" information with program details
           - Cross-platform support (macOS, Linux, Windows)
 
@@ -144,18 +159,50 @@ jobs:
           4. Required dependencies: `libasound2`, `libxcb`, `libfontconfig`
 
           #### Windows
+
+          **Option 1: MSI Installer (Recommended)**
+          1. Download `sr-player-${{ github.ref_name }}-setup.msi`
+          2. Double-click to install
+          3. Follow the installation wizard
+          4. Launch from Start Menu
+
+          **Option 2: Portable (No Installation)**
           1. Download `sr-player-${{ github.ref_name }}-windows.zip`
           2. Extract the ZIP file
           3. Run `sr-player.exe`
 
-          ### What's Changed in Milestone 4
-          - Podcast browsing and playback
-          - Cross-platform builds for macOS, Linux, and Windows
-          - Gapless streaming for both live and podcast content
-          - Full Sveriges Radio API integration
+          **Note:** Windows may show a security warning for unsigned software. Click "More info" → "Run anyway".
+
+          ### What's New
+
+          **Major Features:**
+          - Multi-channel support with instant channel switching
+          - DVR buffer for rewinding live radio streams
+          - Podcast/episode playback with download caching
+          - Enhanced audio engine using Symphonia
+          - Windows MSI installer for easy installation
+
+          **UI/UX Improvements:**
+          - Modular component architecture
+          - Mobile-friendly responsive layout
+          - Volume control and playback progress tracking
+          - Play/pause icons and live indicators
+
+          **Performance:**
+          - Background streaming pool for multiple channels
+          - Schedule data caching to reduce API calls
+          - Gapless playback improvements
+          - Fixed race conditions in streaming
+
+          **Developer Experience:**
+          - Professional Windows deployment with WiX
+          - Code refactoring and cleanup
+          - Improved error handling
+          - Cross-platform CI/CD pipeline
         files: |
           **/SR-Player-${{ github.ref_name }}-macos.zip
           **/sr-player-${{ github.ref_name }}-linux.tar.gz
           **/sr-player-${{ github.ref_name }}-windows.zip
+          **/sr-player-${{ github.ref_name }}-setup.msi
         draft: false
         prerelease: false
