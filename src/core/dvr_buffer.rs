@@ -292,12 +292,15 @@ mod tests {
 
         // Buffer should have removed old chunks to stay under size limit
         let stats = buffer.get_stats().await;
-        eprintln!("Stats: chunks={}, bytes={}, max_size={}",
-                  stats.total_chunks, stats.total_bytes, buffer.max_size_bytes);
+        eprintln!(
+            "Stats: chunks={}, bytes={}, max_size={}",
+            stats.total_chunks, stats.total_bytes, buffer.max_size_bytes
+        );
         assert!(
             stats.total_chunks < 100,
             "Expected fewer than 100 chunks, got {}. Max size: {} bytes",
-            stats.total_chunks, buffer.max_size_bytes
+            stats.total_chunks,
+            buffer.max_size_bytes
         );
         // Should be around 2 chunks (1.6KB / 1KB ≈ 1-2 chunks)
         assert!(stats.total_chunks < 5, "Too many chunks retained");
