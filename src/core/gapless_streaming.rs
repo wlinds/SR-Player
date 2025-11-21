@@ -629,8 +629,14 @@ impl GaplessPlayer {
             let connect_start = Instant::now();
             info!("Connecting to stream (attempt {})...", retry_count + 1);
 
-            match client.get(url).send().await {
-                Ok(resp) => {
+            // Wrap connection attempt in timeout for faster failure detection
+            let connection_timeout = Duration::from_secs(5);
+            let send_result =
+                tokio::time::timeout(connection_timeout, client.get(url).send()).await;
+
+            match send_result {
+                Ok(Ok(resp)) => {
+                    // Successfully connected
                     let elapsed = connect_start.elapsed().as_millis();
                     info!("HTTP connection established in {:.1}ms", elapsed);
                     info!("Final URL after redirects: {}", resp.url());
@@ -642,7 +648,8 @@ impl GaplessPlayer {
                     }
                     return Some(resp);
                 }
-                Err(e) => {
+                Ok(Err(e)) => {
+                    // Connection error
                     retry_count += 1;
                     if retry_count >= MAX_RETRIES {
                         error!("Failed to connect after {} retries: {}", MAX_RETRIES, e);
@@ -651,6 +658,23 @@ impl GaplessPlayer {
                     warn!(
                         "Connection failed (attempt {}/{}): {}, retrying in {:?}...",
                         retry_count, MAX_RETRIES, e, retry_delay
+                    );
+                    tokio::time::sleep(retry_delay).await;
+                    retry_delay *= 2;
+                }
+                Err(_timeout) => {
+                    // Timeout
+                    retry_count += 1;
+                    if retry_count >= MAX_RETRIES {
+                        error!(
+                            "Failed to connect after {} retries: connection timeout",
+                            MAX_RETRIES
+                        );
+                        return None;
+                    }
+                    warn!(
+                        "Connection timeout (attempt {}/{}), retrying in {:?}...",
+                        retry_count, MAX_RETRIES, retry_delay
                     );
                     tokio::time::sleep(retry_delay).await;
                     retry_delay *= 2;
