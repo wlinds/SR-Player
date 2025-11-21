@@ -67,7 +67,8 @@ impl DvrBuffer {
 
     // Create a DVR buffer with custom duration
     pub fn with_duration(duration: Duration) -> Self {
-        let max_size_bytes = duration.as_secs() as usize * ESTIMATED_BITRATE_BYTES_PER_SEC;
+        let max_size_bytes =
+            (duration.as_secs_f64() * ESTIMATED_BITRATE_BYTES_PER_SEC as f64) as usize;
 
         info!(
             "Creating DVR buffer: duration={}s, max_size={}MB",
@@ -129,6 +130,7 @@ impl DvrBuffer {
             if should_remove {
                 if let Some(removed) = chunks.pop_front() {
                     *total_bytes = total_bytes.saturating_sub(removed.data.len());
+                    *total_chunks = total_chunks.saturating_sub(1);
                 }
             } else {
                 break;
@@ -278,18 +280,26 @@ mod tests {
 
     #[tokio::test]
     async fn test_dvr_buffer_overflow() {
-        // Create a small buffer (1 second, ~16KB)
-        let buffer = DvrBuffer::with_duration(Duration::from_secs(1));
+        // Create a very small buffer (100ms, ~1.6KB)
+        let buffer = DvrBuffer::with_duration(Duration::from_millis(100));
 
-        // Add chunks that will overflow the buffer
+        // Add chunks that will overflow the buffer by size
+        // 100 chunks * 1KB = 100KB, way more than 1.6KB capacity
         for _i in 0..100 {
             let data = vec![0u8; 1024]; // 1KB per chunk
             buffer.push(Bytes::from(data)).await;
-            tokio::time::sleep(Duration::from_millis(10)).await;
         }
 
-        // Buffer should have removed old chunks
+        // Buffer should have removed old chunks to stay under size limit
         let stats = buffer.get_stats().await;
-        assert!(stats.total_chunks < 100);
+        eprintln!("Stats: chunks={}, bytes={}, max_size={}",
+                  stats.total_chunks, stats.total_bytes, buffer.max_size_bytes);
+        assert!(
+            stats.total_chunks < 100,
+            "Expected fewer than 100 chunks, got {}. Max size: {} bytes",
+            stats.total_chunks, buffer.max_size_bytes
+        );
+        // Should be around 2 chunks (1.6KB / 1KB ≈ 1-2 chunks)
+        assert!(stats.total_chunks < 5, "Too many chunks retained");
     }
 }
