@@ -417,7 +417,8 @@ impl GaplessPlayer {
                     .user_agent("SR-Player/3.0-Gapless")
                     .pool_max_idle_per_host(5) // Keep 5 idle connections per host
                     .pool_idle_timeout(Duration::from_secs(90)) // Keep connections alive for 90s
-                    .connect_timeout(Duration::from_secs(10)) // Reduced from 30s
+                    .connect_timeout(Duration::from_secs(5)) // Fast connect timeout for quick failure detection
+                    .timeout(Duration::from_secs(10)) // Overall request timeout
                     .tcp_keepalive(Some(Duration::from_secs(30)))
                     .http2_keep_alive_interval(Some(Duration::from_secs(10))) // HTTP/2 keepalive
                     .http2_keep_alive_timeout(Duration::from_secs(20))
@@ -537,21 +538,80 @@ impl GaplessPlayer {
 
             info!("Initial buffer sent successfully, continuing stream...");
 
-            // Stream remaining bytes continuously
-            let start_time = Instant::now();
-            Self::stream_chunks(
-                response,
-                generation,
-                &generation_check,
-                &mut command_rx,
-                &data_tx,
-                &stats,
-                &live_buffer,
-                &buffer_start_time,
-                &mut bytes_downloaded,
-                start_time,
-            )
-            .await;
+            // Stream with automatic reconnection on errors
+            let mut reconnect_count = 0;
+            const MAX_RECONNECTS: u32 = 10; // Allow multiple reconnection attempts
+
+            loop {
+                // Check if still current
+                if generation_check.load(Ordering::SeqCst) != generation {
+                    info!(
+                        "Download task generation {} superseded, exiting",
+                        generation
+                    );
+                    break;
+                }
+
+                // Stream remaining bytes continuously
+                let start_time = Instant::now();
+                match Self::stream_chunks(
+                    response,
+                    generation,
+                    &generation_check,
+                    &mut command_rx,
+                    &data_tx,
+                    &stats,
+                    &live_buffer,
+                    &buffer_start_time,
+                    &mut bytes_downloaded,
+                    start_time,
+                )
+                .await
+                {
+                    Ok(()) => {
+                        // Normal stop (user stopped or generation changed)
+                        info!("Stream stopped normally");
+                        break;
+                    }
+                    Err(()) => {
+                        // Connection error - attempt reconnection
+                        reconnect_count += 1;
+                        if reconnect_count > MAX_RECONNECTS {
+                            error!(
+                                "Max reconnection attempts ({}) reached, giving up",
+                                MAX_RECONNECTS
+                            );
+                            break;
+                        }
+
+                        info!(
+                            "Connection lost, attempting reconnection {}/{}...",
+                            reconnect_count, MAX_RECONNECTS
+                        );
+
+                        // Wait a bit before reconnecting (but not on first attempt)
+                        if reconnect_count > 1 {
+                            let reconnect_delay =
+                                Duration::from_millis(200 * (reconnect_count - 1) as u64);
+                            tokio::time::sleep(reconnect_delay).await;
+                        }
+
+                        // Reconnect
+                        let Some(new_response) =
+                            Self::connect_with_retry(&client, &url, generation, &generation_check)
+                                .await
+                        else {
+                            error!("Failed to reconnect");
+                            break;
+                        };
+
+                        info!("Reconnected successfully, resuming stream...");
+                        response = new_response;
+                        // Reset reconnect count on successful reconnection
+                        reconnect_count = 0;
+                    }
+                }
+            }
 
             info!("Download task finished");
         })
@@ -572,8 +632,14 @@ impl GaplessPlayer {
             let connect_start = Instant::now();
             info!("Connecting to stream (attempt {})...", retry_count + 1);
 
-            match client.get(url).send().await {
-                Ok(resp) => {
+            // Wrap connection attempt in timeout for faster failure detection
+            let connection_timeout = Duration::from_secs(5);
+            let send_result =
+                tokio::time::timeout(connection_timeout, client.get(url).send()).await;
+
+            match send_result {
+                Ok(Ok(resp)) => {
+                    // Successfully connected
                     let elapsed = connect_start.elapsed().as_millis();
                     info!("HTTP connection established in {:.1}ms", elapsed);
                     info!("Final URL after redirects: {}", resp.url());
@@ -585,7 +651,8 @@ impl GaplessPlayer {
                     }
                     return Some(resp);
                 }
-                Err(e) => {
+                Ok(Err(e)) => {
+                    // Connection error
                     retry_count += 1;
                     if retry_count >= MAX_RETRIES {
                         error!("Failed to connect after {} retries: {}", MAX_RETRIES, e);
@@ -594,6 +661,23 @@ impl GaplessPlayer {
                     warn!(
                         "Connection failed (attempt {}/{}): {}, retrying in {:?}...",
                         retry_count, MAX_RETRIES, e, retry_delay
+                    );
+                    tokio::time::sleep(retry_delay).await;
+                    retry_delay *= 2;
+                }
+                Err(_timeout) => {
+                    // Timeout
+                    retry_count += 1;
+                    if retry_count >= MAX_RETRIES {
+                        error!(
+                            "Failed to connect after {} retries: connection timeout",
+                            MAX_RETRIES
+                        );
+                        return None;
+                    }
+                    warn!(
+                        "Connection timeout (attempt {}/{}), retrying in {:?}...",
+                        retry_count, MAX_RETRIES, retry_delay
                     );
                     tokio::time::sleep(retry_delay).await;
                     retry_delay *= 2;
@@ -644,6 +728,7 @@ impl GaplessPlayer {
     }
 
     // Stream chunks continuously
+    // Returns Ok(()) if stopped normally, Err(()) if connection error (needs reconnect)
     #[allow(clippy::too_many_arguments)]
     async fn stream_chunks(
         mut response: reqwest::Response,
@@ -656,25 +741,33 @@ impl GaplessPlayer {
         buffer_start_time: &Arc<Mutex<Option<Instant>>>,
         bytes_downloaded: &mut usize,
         start_time: Instant,
-    ) {
-        while let Some(chunk_result) = response.chunk().await.transpose() {
+    ) -> Result<(), ()> {
+        // Timeout for receiving chunks (detect stalled connections)
+        // Short timeout to quickly detect VPN/network changes
+        const CHUNK_TIMEOUT: Duration = Duration::from_secs(3);
+
+        loop {
             // Check if still current generation
             if generation_check.load(Ordering::SeqCst) != generation {
                 info!(
                     "Download task generation {} superseded, exiting",
                     generation
                 );
-                break;
+                return Ok(()); // Normal stop
             }
 
             // Check for stop command (non-blocking)
             if let Ok(StreamCommand::Stop) = command_rx.try_recv() {
                 info!("Stop command received");
-                break;
+                return Ok(()); // Normal stop
             }
 
+            // Read next chunk with timeout
+            let chunk_result = tokio::time::timeout(CHUNK_TIMEOUT, response.chunk()).await;
+
             match chunk_result {
-                Ok(chunk) => {
+                Ok(Ok(Some(chunk))) => {
+                    // Successfully received chunk
                     *bytes_downloaded += chunk.len();
 
                     // Update stats
@@ -697,12 +790,25 @@ impl GaplessPlayer {
 
                     // Send chunk to decoder
                     if data_tx.send(chunk).is_err() {
-                        break;
+                        return Ok(()); // Decoder stopped, normal exit
                     }
                 }
-                Err(e) => {
-                    error!("Error reading chunk: {}", e);
-                    break;
+                Ok(Ok(None)) => {
+                    // Stream ended without error - this might be unexpected disconnection
+                    error!(
+                        "Stream ended unexpectedly (connection likely dropped) - will reconnect"
+                    );
+                    return Err(()); // Unexpected end, needs reconnect
+                }
+                Ok(Err(e)) => {
+                    // Network error while reading chunk
+                    error!("Error reading chunk: {} - will attempt reconnection", e);
+                    return Err(()); // Connection error, needs reconnect
+                }
+                Err(_timeout) => {
+                    // Timeout waiting for chunk - connection stalled
+                    error!("Timeout waiting for data (connection stalled) - will reconnect");
+                    return Err(()); // Timeout, needs reconnect
                 }
             }
         }
