@@ -282,7 +282,7 @@ mod tests {
         let buffer = DvrBuffer::with_duration(Duration::from_secs(1));
 
         // Add chunks that will overflow the buffer
-        for i in 0..100 {
+        for _i in 0..100 {
             let data = vec![0u8; 1024]; // 1KB per chunk
             buffer.push(Bytes::from(data)).await;
             tokio::time::sleep(Duration::from_millis(10)).await;

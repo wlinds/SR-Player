@@ -86,7 +86,7 @@ pub async fn fetch_image_bytes(url: String) -> Option<Vec<u8>> {
 /// # Returns
 /// Vec<O> with samples interleaved by channel
 pub fn interleave_audio_buffer<T, O>(
-    buf: &std::borrow::Cow<symphonia::core::audio::AudioBuffer<T>>,
+    buf: &symphonia::core::audio::AudioBuffer<T>,
     convert: impl Fn(T) -> O,
 ) -> Vec<O>
 where
@@ -116,29 +116,29 @@ where
 /// Channels are interleaved: [L R L R L R...] for stereo.
 pub fn audio_buffer_to_i16(decoded: &AudioBufferRef) -> Vec<i16> {
     match decoded {
-        AudioBufferRef::S16(buf) => interleave_audio_buffer(&buf, |sample| sample),
+        AudioBufferRef::S16(buf) => interleave_audio_buffer(buf, |sample| sample),
         AudioBufferRef::F32(buf) => {
-            interleave_audio_buffer(&buf, |sample| (sample * 32767.0) as i16)
+            interleave_audio_buffer(buf, |sample| (sample * 32767.0) as i16)
         }
-        AudioBufferRef::S32(buf) => interleave_audio_buffer(&buf, |sample| (sample >> 16) as i16),
+        AudioBufferRef::S32(buf) => interleave_audio_buffer(buf, |sample| (sample >> 16) as i16),
         AudioBufferRef::U8(buf) => {
-            interleave_audio_buffer(&buf, |sample| (sample as i16 - 128) << 8)
+            interleave_audio_buffer(buf, |sample| (sample as i16 - 128) << 8)
         }
         AudioBufferRef::U16(buf) => {
-            interleave_audio_buffer(&buf, |sample| (sample as i32 - 32768) as i16)
+            interleave_audio_buffer(buf, |sample| (sample as i32 - 32768) as i16)
         }
         AudioBufferRef::U32(buf) => {
-            interleave_audio_buffer(&buf, |sample| ((sample >> 16) as i32 - 32768) as i16)
+            interleave_audio_buffer(buf, |sample| ((sample >> 16) as i32 - 32768) as i16)
         }
-        AudioBufferRef::S8(buf) => interleave_audio_buffer(&buf, |sample| (sample as i16) << 8),
+        AudioBufferRef::S8(buf) => interleave_audio_buffer(buf, |sample| (sample as i16) << 8),
         AudioBufferRef::F64(buf) => {
-            interleave_audio_buffer(&buf, |sample| (sample * 32767.0) as i16)
+            interleave_audio_buffer(buf, |sample| (sample * 32767.0) as i16)
         }
         AudioBufferRef::U24(buf) => {
-            interleave_audio_buffer(&buf, |sample| ((sample.inner() >> 8) as i32 - 32768) as i16)
+            interleave_audio_buffer(buf, |sample| ((sample.inner() >> 8) as i32 - 32768) as i16)
         }
         AudioBufferRef::S24(buf) => {
-            interleave_audio_buffer(&buf, |sample| (sample.inner() >> 8) as i16)
+            interleave_audio_buffer(buf, |sample| (sample.inner() >> 8) as i16)
         }
     }
 }
@@ -149,28 +149,28 @@ pub fn audio_buffer_to_i16(decoded: &AudioBufferRef) -> Vec<i16> {
 /// Channels are interleaved: [L R L R L R...] for stereo.
 pub fn audio_buffer_to_f32(decoded: &AudioBufferRef) -> Vec<f32> {
     match decoded {
-        AudioBufferRef::F32(buf) => interleave_audio_buffer(&buf, |sample| sample),
-        AudioBufferRef::F64(buf) => interleave_audio_buffer(&buf, |sample| sample as f32),
-        AudioBufferRef::S16(buf) => interleave_audio_buffer(&buf, |sample| sample as f32 / 32768.0),
+        AudioBufferRef::F32(buf) => interleave_audio_buffer(buf, |sample| sample),
+        AudioBufferRef::F64(buf) => interleave_audio_buffer(buf, |sample| sample as f32),
+        AudioBufferRef::S16(buf) => interleave_audio_buffer(buf, |sample| sample as f32 / 32768.0),
         AudioBufferRef::S32(buf) => {
-            interleave_audio_buffer(&buf, |sample| sample as f32 / 2147483648.0)
+            interleave_audio_buffer(buf, |sample| sample as f32 / 2147483648.0)
         }
-        AudioBufferRef::S8(buf) => interleave_audio_buffer(&buf, |sample| sample as f32 / 128.0),
+        AudioBufferRef::S8(buf) => interleave_audio_buffer(buf, |sample| sample as f32 / 128.0),
         AudioBufferRef::U8(buf) => {
-            interleave_audio_buffer(&buf, |sample| (sample as f32 - 128.0) / 128.0)
+            interleave_audio_buffer(buf, |sample| (sample as f32 - 128.0) / 128.0)
         }
         AudioBufferRef::U16(buf) => {
-            interleave_audio_buffer(&buf, |sample| (sample as f32 - 32768.0) / 32768.0)
+            interleave_audio_buffer(buf, |sample| (sample as f32 - 32768.0) / 32768.0)
         }
         AudioBufferRef::U32(buf) => {
-            interleave_audio_buffer(&buf, |sample| (sample as f32 - 2147483648.0) / 2147483648.0)
+            interleave_audio_buffer(buf, |sample| (sample as f32 - 2147483648.0) / 2147483648.0)
         }
-        AudioBufferRef::U24(buf) => interleave_audio_buffer(&buf, |sample| {
-            let val = sample.inner() as u32;
+        AudioBufferRef::U24(buf) => interleave_audio_buffer(buf, |sample| {
+            let val = sample.inner();
             (val as f32 - 8388608.0) / 8388608.0
         }),
         AudioBufferRef::S24(buf) => {
-            interleave_audio_buffer(&buf, |sample| sample.inner() as f32 / 8388608.0)
+            interleave_audio_buffer(buf, |sample| sample.inner() as f32 / 8388608.0)
         }
     }
 }
