@@ -417,7 +417,8 @@ impl GaplessPlayer {
                     .user_agent("SR-Player/3.0-Gapless")
                     .pool_max_idle_per_host(5) // Keep 5 idle connections per host
                     .pool_idle_timeout(Duration::from_secs(90)) // Keep connections alive for 90s
-                    .connect_timeout(Duration::from_secs(10)) // Reduced from 30s
+                    .connect_timeout(Duration::from_secs(5)) // Fast connect timeout for quick failure detection
+                    .timeout(Duration::from_secs(10)) // Overall request timeout
                     .tcp_keepalive(Some(Duration::from_secs(30)))
                     .http2_keep_alive_interval(Some(Duration::from_secs(10))) // HTTP/2 keepalive
                     .http2_keep_alive_timeout(Duration::from_secs(20))
@@ -585,9 +586,12 @@ impl GaplessPlayer {
                             reconnect_count, MAX_RECONNECTS
                         );
 
-                        // Wait a bit before reconnecting
-                        let reconnect_delay = Duration::from_millis(500 * reconnect_count as u64);
-                        tokio::time::sleep(reconnect_delay).await;
+                        // Wait a bit before reconnecting (but not on first attempt)
+                        if reconnect_count > 1 {
+                            let reconnect_delay =
+                                Duration::from_millis(200 * (reconnect_count - 1) as u64);
+                            tokio::time::sleep(reconnect_delay).await;
+                        }
 
                         // Reconnect
                         let Some(new_response) =
