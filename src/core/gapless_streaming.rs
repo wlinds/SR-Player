@@ -711,7 +711,11 @@ impl GaplessPlayer {
         bytes_downloaded: &mut usize,
         start_time: Instant,
     ) -> Result<(), ()> {
-        while let Some(chunk_result) = response.chunk().await.transpose() {
+        // Timeout for receiving chunks (detect stalled connections)
+        // Short timeout to quickly detect VPN/network changes
+        const CHUNK_TIMEOUT: Duration = Duration::from_secs(3);
+
+        loop {
             // Check if still current generation
             if generation_check.load(Ordering::SeqCst) != generation {
                 info!(
@@ -727,8 +731,12 @@ impl GaplessPlayer {
                 return Ok(()); // Normal stop
             }
 
+            // Read next chunk with timeout
+            let chunk_result = tokio::time::timeout(CHUNK_TIMEOUT, response.chunk()).await;
+
             match chunk_result {
-                Ok(chunk) => {
+                Ok(Ok(Some(chunk))) => {
+                    // Successfully received chunk
                     *bytes_downloaded += chunk.len();
 
                     // Update stats
@@ -754,16 +762,23 @@ impl GaplessPlayer {
                         return Ok(()); // Decoder stopped, normal exit
                     }
                 }
-                Err(e) => {
+                Ok(Ok(None)) => {
+                    // Stream ended without error - this might be unexpected disconnection
+                    error!("Stream ended unexpectedly (connection likely dropped) - will reconnect");
+                    return Err(()); // Unexpected end, needs reconnect
+                }
+                Ok(Err(e)) => {
+                    // Network error while reading chunk
                     error!("Error reading chunk: {} - will attempt reconnection", e);
                     return Err(()); // Connection error, needs reconnect
                 }
+                Err(_timeout) => {
+                    // Timeout waiting for chunk - connection stalled
+                    error!("Timeout waiting for data (connection stalled) - will reconnect");
+                    return Err(()); // Timeout, needs reconnect
+                }
             }
         }
-
-        // Stream ended naturally
-        info!("Stream ended");
-        Ok(())
     }
 
     // Spawn the decoder task
