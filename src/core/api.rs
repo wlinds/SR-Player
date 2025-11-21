@@ -134,7 +134,10 @@ impl SrApiClient {
             let cache = self.schedule_cache.lock().unwrap();
             if let (Some(data), Some(last_fetch)) = (&cache.data, cache.last_fetch) {
                 if last_fetch.elapsed() < CACHE_TTL {
-                    debug!("Using cached schedule (age: {:.1}s)", last_fetch.elapsed().as_secs_f32());
+                    debug!(
+                        "Using cached schedule (age: {:.1}s)",
+                        last_fetch.elapsed().as_secs_f32()
+                    );
                     return Ok(data.clone());
                 }
             }

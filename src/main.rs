@@ -23,6 +23,9 @@
 // 6. Start periodic program update task
 // 7. Show window and run event loop
 
+// Hide console window on Windows in release builds
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 // MODULE DECLARATIONS
 // Like 'import' in Python or JavaScript
 // These tell Rust where to find our code modules
@@ -32,7 +35,7 @@ mod core; // This loads src/core/mod.rs
 // Like: from core.api import SrApiClient in Python
 // Or: import { SrApiClient } from './core/api' in JavaScript
 use core::api::SrApiClient;
-use core::channel_pool_send_safe::SendSafeChannelPool;
+use core::channel_pool::ChannelPool;
 use core::episode_cache::EpisodeCache;
 use core::file_player_send_safe::SendSafeFilePlayer;
 use core::gapless_send_safe::SendSafeGaplessPlayer;
@@ -311,7 +314,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // RUST_LOG=debug cargo run to see debug logs
     // Like console.log() in JavaScript or print() in Python, but better
     env_logger::Builder::from_default_env()
-        .filter_level(log::LevelFilter::Info)  // Show INFO logs by default
+        .filter_level(log::LevelFilter::Info) // Show INFO logs by default
         .init();
 
     println!("Starting SR Player...");
@@ -340,14 +343,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create the API client (for fetching SR data)
     let api_client = SrApiClient::new()?;
 
-    // Create the Send-safe gapless streaming player (M3!)
-    // Multi-channel streaming pool
+    // Create multi-channel streaming pool
     // Keeps up to 3 channels streaming in the background for instant switching
-    let channel_pool = Arc::new(
-        runtime
-            .block_on(SendSafeChannelPool::new())
-            .expect("Failed to create channel pool"),
-    );
+    // ChannelPool is already Clone + Send + Sync, no need for Arc wrapper
+    let channel_pool = ChannelPool::new().expect("Failed to create channel pool");
 
     // Create episode cache for background downloads
     let episode_cache = EpisodeCache::new();
@@ -367,7 +366,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Initialize volume to match UI default (0.5 = 50%)
     // Note: UI uses logarithmic scale, so 0.5 slider = 0.25 actual volume
-    runtime.block_on(channel_pool.set_volume(0.25));
+    runtime.block_on(async {
+        channel_pool.set_volume(0.25).await;
+    });
     file_player.set_volume(0.25);
 
     println!("Backend components initialized");
@@ -410,7 +411,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // JavaScript: const playerCopy = player;
     // Python: player_copy = player (but for closures)
 
-    // CALLBACK 1: When user selects a channel
+    // ========================================================================
+    // UI EVENT HANDLERS
+    // ========================================================================
+    // Each callback below handles a specific user interaction.
+    // The pattern is: clone state -> create closure -> register callback
+
+    // CALLBACK 1: Channel Selection Handler
+    // Triggered when user clicks on a radio channel
     {
         let ui_weak = ui.as_weak();
         let pool = channel_pool.clone();
@@ -1168,28 +1176,36 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
 
                 // Start background download for seeking with progress tracking
-                episode_cache_for_download.start_download(url_for_download, move |downloaded, total| {
-                    let percent = if total > 0 {
-                        (downloaded as f64 / total as f64 * 100.0) as i32
-                    } else {
-                        0
-                    };
-
-                    let ui_for_clear = ui_weak_for_download.clone();
-                    let _ = ui_weak_for_download.upgrade_in_event_loop(move |ui| {
-                        if downloaded >= total && total > 0 {
-                            ui.set_download_status("Downloaded (100%)".into());
-                            // Clear after 2 seconds
-                            slint::Timer::single_shot(std::time::Duration::from_secs(2), move || {
-                                let _ = ui_for_clear.upgrade_in_event_loop(|ui| {
-                                    ui.set_download_status("".into());
-                                });
-                            });
+                episode_cache_for_download.start_download(
+                    url_for_download,
+                    move |downloaded, total| {
+                        let percent = if total > 0 {
+                            (downloaded as f64 / total as f64 * 100.0) as i32
                         } else {
-                            ui.set_download_status(format!("Downloading ({}%)", percent).into());
-                        }
-                    });
-                });
+                            0
+                        };
+
+                        let ui_for_clear = ui_weak_for_download.clone();
+                        let _ = ui_weak_for_download.upgrade_in_event_loop(move |ui| {
+                            if downloaded >= total && total > 0 {
+                                ui.set_download_status("Downloaded (100%)".into());
+                                // Clear after 2 seconds
+                                slint::Timer::single_shot(
+                                    std::time::Duration::from_secs(2),
+                                    move || {
+                                        let _ = ui_for_clear.upgrade_in_event_loop(|ui| {
+                                            ui.set_download_status("".into());
+                                        });
+                                    },
+                                );
+                            } else {
+                                ui.set_download_status(
+                                    format!("Downloading ({}%)", percent).into(),
+                                );
+                            }
+                        });
+                    },
+                );
 
                 // Start streaming playback (after stop completes)
                 match streaming_for_playback.start_stream(url_for_playback).await {

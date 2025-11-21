@@ -130,9 +130,13 @@ impl SendSafeFilePlayer {
     // Check if the sink has finished playing all queued audio
     pub async fn is_finished(&self) -> bool {
         let (response_tx, response_rx) = oneshot::channel();
-        if self.command_tx.send(FilePlayerCommand::IsFinished {
-            response: response_tx,
-        }).is_err() {
+        if self
+            .command_tx
+            .send(FilePlayerCommand::IsFinished {
+                response: response_tx,
+            })
+            .is_err()
+        {
             return true; // If channel is closed, consider it finished
         }
         response_rx.await.unwrap_or(true)

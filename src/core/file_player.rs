@@ -8,6 +8,7 @@
 // 2. Use Symphonia decoder with Cursor (supports MP3, AAC, and more)
 // 3. Rodio's Sink with seek support
 
+use crate::core::utils::audio_buffer_to_f32;
 use anyhow::{Context, Result};
 use bytes::Bytes;
 use log::info;
@@ -15,14 +16,13 @@ use rodio::{OutputStream, OutputStreamHandle, Sink, Source};
 use std::io::Cursor;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::Mutex;
-use symphonia::core::audio::{AudioBufferRef, Signal};
 use symphonia::core::codecs::{DecoderOptions, CODEC_TYPE_NULL};
 use symphonia::core::errors::Error as SymphoniaError;
 use symphonia::core::formats::FormatOptions;
 use symphonia::core::io::MediaSourceStream;
 use symphonia::core::meta::MetadataOptions;
 use symphonia::core::probe::Hint;
+use tokio::sync::Mutex;
 
 // Custom audio source with fast byte-level seeking (supports MP3, AAC, etc)
 struct FastAudioSource {
@@ -67,14 +67,9 @@ impl FastAudioSource {
         let track_id = track.id;
         let codec_params = &track.codec_params;
 
-        let sample_rate = codec_params
-            .sample_rate
-            .context("Sample rate not found")? as u32;
+        let sample_rate = codec_params.sample_rate.context("Sample rate not found")? as u32;
 
-        let channels = codec_params
-            .channels
-            .context("Channels not found")?
-            .count() as u16;
+        let channels = codec_params.channels.context("Channels not found")?.count() as u16;
 
         info!(
             "Detected audio format: sample_rate={}, channels={}",
@@ -98,9 +93,15 @@ impl FastAudioSource {
             // Symphonia will handle frame alignment automatically
             if let Err(e) = format_reader.seek(
                 symphonia::core::formats::SeekMode::Accurate,
-                symphonia::core::formats::SeekTo::TimeStamp { ts: seek_to_ts, track_id },
+                symphonia::core::formats::SeekTo::TimeStamp {
+                    ts: seek_to_ts,
+                    track_id,
+                },
             ) {
-                info!("Seek not supported or failed: {}, starting from beginning", e);
+                info!(
+                    "Seek not supported or failed: {}, starting from beginning",
+                    e
+                );
             } else {
                 info!("Seeked to approximately {}s", seek_seconds);
             }
@@ -128,8 +129,8 @@ impl FastAudioSource {
 
             match decoder.decode(&packet) {
                 Ok(decoded) => {
-                    // Convert to f32 samples
-                    current_samples = Self::convert_audio_buffer(&decoded);
+                    // Convert to f32 samples using shared utility
+                    current_samples = audio_buffer_to_f32(&decoded);
                     break;
                 }
                 Err(SymphoniaError::DecodeError(e)) => {
@@ -151,153 +152,6 @@ impl FastAudioSource {
             fade_in_samples,
             samples_played: 0,
         })
-    }
-
-    // Convert Symphonia AudioBufferRef to f32 samples
-    fn convert_audio_buffer(decoded: &AudioBufferRef) -> Vec<f32> {
-        match decoded {
-            AudioBufferRef::F32(buf) => {
-                // Interleave channels
-                let mut samples = Vec::new();
-                let num_frames = buf.frames();
-                let num_channels = buf.spec().channels.count();
-
-                for frame_idx in 0..num_frames {
-                    for ch_idx in 0..num_channels {
-                        samples.push(buf.chan(ch_idx)[frame_idx]);
-                    }
-                }
-                samples
-            }
-            AudioBufferRef::U8(buf) => {
-                let mut samples = Vec::new();
-                let num_frames = buf.frames();
-                let num_channels = buf.spec().channels.count();
-
-                for frame_idx in 0..num_frames {
-                    for ch_idx in 0..num_channels {
-                        // Convert u8 [0, 255] to f32 [-1.0, 1.0]
-                        let sample = (buf.chan(ch_idx)[frame_idx] as f32 - 128.0) / 128.0;
-                        samples.push(sample);
-                    }
-                }
-                samples
-            }
-            AudioBufferRef::U16(buf) => {
-                let mut samples = Vec::new();
-                let num_frames = buf.frames();
-                let num_channels = buf.spec().channels.count();
-
-                for frame_idx in 0..num_frames {
-                    for ch_idx in 0..num_channels {
-                        // Convert u16 [0, 65535] to f32 [-1.0, 1.0]
-                        let sample = (buf.chan(ch_idx)[frame_idx] as f32 - 32768.0) / 32768.0;
-                        samples.push(sample);
-                    }
-                }
-                samples
-            }
-            AudioBufferRef::U32(buf) => {
-                let mut samples = Vec::new();
-                let num_frames = buf.frames();
-                let num_channels = buf.spec().channels.count();
-
-                for frame_idx in 0..num_frames {
-                    for ch_idx in 0..num_channels {
-                        // Convert u32 [0, 4294967295] to f32 [-1.0, 1.0]
-                        let sample = (buf.chan(ch_idx)[frame_idx] as f32 - 2147483648.0) / 2147483648.0;
-                        samples.push(sample);
-                    }
-                }
-                samples
-            }
-            AudioBufferRef::S8(buf) => {
-                let mut samples = Vec::new();
-                let num_frames = buf.frames();
-                let num_channels = buf.spec().channels.count();
-
-                for frame_idx in 0..num_frames {
-                    for ch_idx in 0..num_channels {
-                        // Convert s8 [-128, 127] to f32 [-1.0, 1.0]
-                        let sample = buf.chan(ch_idx)[frame_idx] as f32 / 128.0;
-                        samples.push(sample);
-                    }
-                }
-                samples
-            }
-            AudioBufferRef::S16(buf) => {
-                let mut samples = Vec::new();
-                let num_frames = buf.frames();
-                let num_channels = buf.spec().channels.count();
-
-                for frame_idx in 0..num_frames {
-                    for ch_idx in 0..num_channels {
-                        // Convert s16 [-32768, 32767] to f32 [-1.0, 1.0]
-                        let sample = buf.chan(ch_idx)[frame_idx] as f32 / 32768.0;
-                        samples.push(sample);
-                    }
-                }
-                samples
-            }
-            AudioBufferRef::S32(buf) => {
-                let mut samples = Vec::new();
-                let num_frames = buf.frames();
-                let num_channels = buf.spec().channels.count();
-
-                for frame_idx in 0..num_frames {
-                    for ch_idx in 0..num_channels {
-                        // Convert s32 [-2147483648, 2147483647] to f32 [-1.0, 1.0]
-                        let sample = buf.chan(ch_idx)[frame_idx] as f32 / 2147483648.0;
-                        samples.push(sample);
-                    }
-                }
-                samples
-            }
-            AudioBufferRef::F64(buf) => {
-                let mut samples = Vec::new();
-                let num_frames = buf.frames();
-                let num_channels = buf.spec().channels.count();
-
-                for frame_idx in 0..num_frames {
-                    for ch_idx in 0..num_channels {
-                        samples.push(buf.chan(ch_idx)[frame_idx] as f32);
-                    }
-                }
-                samples
-            }
-            AudioBufferRef::U24(buf) => {
-                let mut samples = Vec::new();
-                let num_frames = buf.frames();
-                let num_channels = buf.spec().channels.count();
-
-                for frame_idx in 0..num_frames {
-                    for ch_idx in 0..num_channels {
-                        // Convert u24 to f32 [-1.0, 1.0]
-                        // u24 value range [0, 16777215]
-                        let val = buf.chan(ch_idx)[frame_idx].inner() as u32;
-                        let sample = (val as f32 - 8388608.0) / 8388608.0;
-                        samples.push(sample);
-                    }
-                }
-                samples
-            }
-            AudioBufferRef::S24(buf) => {
-                let mut samples = Vec::new();
-                let num_frames = buf.frames();
-                let num_channels = buf.spec().channels.count();
-
-                for frame_idx in 0..num_frames {
-                    for ch_idx in 0..num_channels {
-                        // Convert s24 to f32 [-1.0, 1.0]
-                        // s24 value range [-8388608, 8388607]
-                        let val = buf.chan(ch_idx)[frame_idx].inner();
-                        let sample = val as f32 / 8388608.0;
-                        samples.push(sample);
-                    }
-                }
-                samples
-            }
-        }
     }
 }
 
@@ -334,7 +188,7 @@ impl Iterator for FastAudioSource {
 
             match self.decoder.decode(&packet) {
                 Ok(decoded) => {
-                    self.current_samples = Self::convert_audio_buffer(&decoded);
+                    self.current_samples = audio_buffer_to_f32(&decoded);
                     self.sample_offset = 0;
                 }
                 Err(_) => continue,

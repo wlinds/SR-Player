@@ -27,6 +27,11 @@ struct PooledChannel {
     last_used: std::time::Instant,
 }
 
+// ChannelPool is already Send + Sync because:
+// - Arc<Mutex<...>> is Send + Sync (tokio::sync::Mutex)
+// - reqwest::Client is Send + Sync
+// - We derive Clone to allow multiple handles to the same pool
+#[derive(Clone)]
 pub struct ChannelPool {
     // Map of channel_id -> PooledChannel
     channels: Arc<Mutex<HashMap<i32, PooledChannel>>>,
@@ -43,8 +48,8 @@ impl ChannelPool {
         // Connection pooling means: when we switch channels, we reuse existing TCP connections
         let http_client = reqwest::Client::builder()
             .user_agent("SR-Player/3.0-Gapless")
-            .pool_max_idle_per_host(10)         // Keep up to 10 idle connections per host
-            .pool_idle_timeout(Duration::from_secs(120))  // Keep connections alive for 2 minutes
+            .pool_max_idle_per_host(10) // Keep up to 10 idle connections per host
+            .pool_idle_timeout(Duration::from_secs(120)) // Keep connections alive for 2 minutes
             .connect_timeout(Duration::from_secs(10))
             .tcp_keepalive(Some(Duration::from_secs(30)))
             .http2_keep_alive_interval(Some(Duration::from_secs(10)))
@@ -181,7 +186,10 @@ impl ChannelPool {
         if let Some(current_id) = *current {
             let channels = self.channels.lock().await;
             if let Some(channel) = channels.get(&current_id) {
-                return channel.player.get_buffer_data_from_offset(offset_secs).await;
+                return channel
+                    .player
+                    .get_buffer_data_from_offset(offset_secs)
+                    .await;
             }
         }
         anyhow::bail!("No active channel")

@@ -33,8 +33,8 @@ const ESTIMATED_BITRATE_BYTES_PER_SEC: usize = 16 * 1024;
 #[derive(Clone, Debug)]
 struct AudioChunk {
     data: Bytes,
-    timestamp: Instant,           // When this chunk was received
-    offset_from_start: Duration,  // Time offset from buffer start
+    timestamp: Instant,          // When this chunk was received
+    offset_from_start: Duration, // Time offset from buffer start
 }
 
 // DVR Buffer for time-shifted playback of live streams

@@ -51,8 +51,6 @@ pub enum AudioCommand {
     SetAtLiveEdge {
         at_live: bool,
     },
-    SwitchToLiveBuffer,
-    SwitchToPlaybackBuffer,
     Shutdown,
 }
 
@@ -113,7 +111,10 @@ impl SendSafeGaplessPlayer {
                             let stats = player.get_stats();
                             let _ = response.send(stats);
                         }
-                        AudioCommand::SeekTo { offset_secs, response } => {
+                        AudioCommand::SeekTo {
+                            offset_secs,
+                            response,
+                        } => {
                             let result = player.seek_to(offset_secs).await;
                             let _ = response.send(result);
                         }
@@ -125,11 +126,17 @@ impl SendSafeGaplessPlayer {
                             let range = player.get_buffer_time_range().await;
                             let _ = response.send(range);
                         }
-                        AudioCommand::CanSeekTo { offset_secs, response } => {
+                        AudioCommand::CanSeekTo {
+                            offset_secs,
+                            response,
+                        } => {
                             let can_seek = player.can_seek_to(offset_secs).await;
                             let _ = response.send(can_seek);
                         }
-                        AudioCommand::GetBufferDataFromOffset { offset_secs, response } => {
+                        AudioCommand::GetBufferDataFromOffset {
+                            offset_secs,
+                            response,
+                        } => {
                             let data = player.get_buffer_data_from_offset(offset_secs).await;
                             let _ = response.send(data);
                         }
@@ -139,12 +146,6 @@ impl SendSafeGaplessPlayer {
                         }
                         AudioCommand::SetAtLiveEdge { at_live } => {
                             player.set_at_live_edge(at_live).await;
-                        }
-                        AudioCommand::SwitchToLiveBuffer => {
-                            player.switch_to_live_buffer().await;
-                        }
-                        AudioCommand::SwitchToPlaybackBuffer => {
-                            player.switch_to_playback_buffer().await;
                         }
                         AudioCommand::Shutdown => {
                             player.stop().await;
@@ -242,16 +243,19 @@ impl SendSafeGaplessPlayer {
     // Used for DVR time-shifted playback
     pub async fn get_buffer_data_from_offset(&self, offset_secs: f32) -> Result<Vec<u8>> {
         let (response_tx, response_rx) = oneshot::channel();
-        self.command_tx.send(AudioCommand::GetBufferDataFromOffset {
-            offset_secs,
-            response: response_tx,
-        })?;
+        self.command_tx
+            .send(AudioCommand::GetBufferDataFromOffset {
+                offset_secs,
+                response: response_tx,
+            })?;
         response_rx.await?
     }
 
     // Set whether we're at live edge or time-shifted
     pub async fn set_at_live_edge(&self, at_live: bool) {
-        let _ = self.command_tx.send(AudioCommand::SetAtLiveEdge { at_live });
+        let _ = self
+            .command_tx
+            .send(AudioCommand::SetAtLiveEdge { at_live });
     }
 }
 
