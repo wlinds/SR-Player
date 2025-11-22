@@ -118,7 +118,6 @@
 
         <UIRef Id='WixUI_InstallDir'/>
         <WixVariable Id='WixUILicenseRtf' Value='wix\License.rtf'/>
-        <WixVariable Id='WixUIDialogBmp' Value='wix\Dialog.bmp'/>
 
     </Product>
 </Wix>
