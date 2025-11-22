@@ -5000,7 +5000,7 @@ dependencies = [
 
 [[package]]
 name = "sr-player"
-version = "0.5.5"
+version = "0.5.4"
 dependencies = [
  "anyhow",
  "bytes",
@@ -5021,6 +5021,7 @@ dependencies = [
  "slint-build",
  "symphonia",
  "tokio",
+ "winresource",
 ]
 
 [[package]]
@@ -6895,6 +6896,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "21a0236b59786fed61e2a80582dd500fe61f18b5dca67a4a067d0bc9039339cf"
 dependencies = [
  "memchr",
+]
+
+[[package]]
+name = "winresource"
+version = "0.1.27"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f1ef04dd590e94ff7431a8eda99d5ca659e688d60e930bd0a330062acea4608f"
+dependencies = [
+ "toml 0.9.8",
+ "version_check",
 ]
 
 [[package]]

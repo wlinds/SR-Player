@@ -26,4 +26,15 @@ fn main() {
     println!("cargo:rerun-if-changed=src/ui/tab_bar.slint");
     // This tells Cargo: "If main.slint changes, run build.rs again"
     // Like file watching in webpack or nodemon
+
+    // Embed Windows application icon and metadata
+    // Note: We check CARGO_CFG_TARGET_OS instead of cfg!(target_os) because
+    // build.rs runs on the host, not the target
+    if std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default() == "windows" {
+        let mut res = winresource::WindowsResource::new();
+        res.set_icon("wix/Product.ico");
+        res.set("ProductName", "SR Player");
+        res.set("FileDescription", "Sveriges Radio Streaming Application");
+        res.compile().expect("Failed to compile Windows resources");
+    }
 }
