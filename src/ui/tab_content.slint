@@ -40,7 +40,7 @@ component ListItem inherits Rectangle {
     // ================================================================
     // VISUAL STYLING
     // ================================================================
-    min-height: item-height * 1px;
+    height: item-height * 1px;
     background: background-color;
     border-radius: 4px;
 
@@ -81,6 +81,7 @@ component ListItem inherits Rectangle {
                     font-size: is-group ? 16px : 14px;
                     font-weight: is-group ? 700 : 600;
                     color: is-group ? #ffffff : (is-child ? #e0e0e0 : #ffffff);
+                    overflow: elide;
                 }
 
                 // Optional subtitle (for descriptions, dates, etc.)
@@ -88,6 +89,7 @@ component ListItem inherits Rectangle {
                     text: subtitle;
                     font-size: 11px;
                     color: #aaaaaa;
+                    overflow: elide;
                 }
             }
         }

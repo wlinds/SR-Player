@@ -675,70 +675,50 @@ export component MainWindow inherits Window {
         }
 
         // Favorites Tab - Shows favorite channels and programs
-        if current-tab == 4: VerticalBox {
-            spacing: 8px;
-            padding: 8px;
+        if current-tab == 4: VerticalLayout {
+            vertical-stretch: 1;
 
-            // Favorite Channels Section
-            if favorite-channels.length > 0: VerticalBox {
-                spacing: 4px;
+            // Show channels if any
+            if favorite-channels.length > 0: TabContent {
+                is-channels-tab: true;
+                channels: root.favorite-channels;
+                is-loaded: true;
+                empty-text: "";
+                show-favorite-buttons: true;
 
-                HorizontalBox {
-                    padding-left: 4px;
-                    Text {
-                        text: "Favorite Channels";
-                        font-size: 16px;
-                        font-weight: 700;
-                        color: #ffffff;
-                    }
+                channel-selected(id, url) => {
+                    root.channel-selected(id, url);
                 }
 
-                TabContent {
-                    is-channels-tab: true;
-                    channels: root.favorite-channels;
-                    is-loaded: true;
-                    empty-text: "";
-
-                    channel-selected(id, url) => {
-                        root.channel-selected(id, url);
-                    }
+                favorite-channel-clicked(id) => {
+                    root.toggle-favorite-channel(id);
                 }
             }
 
-            // Favorite Programs Section
-            if favorite-programs.length > 0: VerticalBox {
-                spacing: 4px;
+            // Show programs if any
+            if favorite-programs.length > 0: TabContent {
+                is-programs-tab: true;
+                programs: root.favorite-programs;
+                is-loaded: true;
+                empty-text: "";
+                show-favorite-buttons: true;
 
-                HorizontalBox {
-                    padding-left: 4px;
-                    Text {
-                        text: "Favorite Podcasts";
-                        font-size: 16px;
-                        font-weight: 700;
-                        color: #ffffff;
-                    }
+                program-selected(id) => {
+                    root.program-selected(id);
                 }
 
-                TabContent {
-                    is-programs-tab: true;
-                    programs: root.favorite-programs;
-                    is-loaded: true;
-                    empty-text: "";
-
-                    program-selected(id) => {
-                        root.program-selected(id);
-                    }
+                favorite-program-clicked(id) => {
+                    root.toggle-favorite-program(id);
                 }
             }
 
             // Empty state when no favorites
             if favorite-channels.length == 0 && favorite-programs.length == 0: Text {
-                text: "No favorites yet\n\nClick the star icon on channels or podcasts to add them to your favorites.";
+                text: "No favorites yet. Click the star icon on channels or podcasts to add them.";
                 font-size: 14px;
                 color: #888888;
                 horizontal-alignment: center;
                 vertical-alignment: center;
-                wrap: word-wrap;
             }
         }
         } // end tab navigation VerticalBox

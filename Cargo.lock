@@ -5000,7 +5000,7 @@ dependencies = [
 
 [[package]]
 name = "sr-player"
-version = "0.1.0"
+version = "0.5.5"
 dependencies = [
  "anyhow",
  "bytes",
