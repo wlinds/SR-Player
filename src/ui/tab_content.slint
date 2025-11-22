@@ -58,6 +58,7 @@ component ListItem inherits Rectangle {
         if is-group: Text {
             text: expand-icon;
             font-size: 12px;
+            font-family: "Segoe UI Symbol";
             color: #aaaaaa;
             vertical-alignment: center;
         }
@@ -80,6 +81,7 @@ component ListItem inherits Rectangle {
                     text: is-child ? "  " + title : title;
                     font-size: is-group ? 16px : 14px;
                     font-weight: is-group ? 700 : 600;
+                    font-family: "Segoe UI";
                     color: is-group ? #ffffff : (is-child ? #e0e0e0 : #ffffff);
                     overflow: elide;
                 }
@@ -88,6 +90,7 @@ component ListItem inherits Rectangle {
                 if subtitle != "": Text {
                     text: subtitle;
                     font-size: 11px;
+                    font-family: "Segoe UI";
                     color: #aaaaaa;
                     overflow: elide;
                 }
@@ -207,6 +210,7 @@ export component TabContent inherits VerticalBox {
             text: selected-program-name;
             font-size: 16px;
             font-weight: 600;
+            font-family: "Segoe UI";
             color: #ffffff;
             vertical-alignment: center;
         }
@@ -237,6 +241,7 @@ export component TabContent inherits VerticalBox {
 
             if channels.length == 0 && is-loaded: Text {
                 text: empty-text;
+                font-family: "Segoe UI";
                 color: #888888;
                 horizontal-alignment: center;
                 vertical-alignment: center;
@@ -244,6 +249,7 @@ export component TabContent inherits VerticalBox {
 
             if !is-loaded: Text {
                 text: loading-text;
+                font-family: "Segoe UI";
                 color: #888888;
                 horizontal-alignment: center;
                 vertical-alignment: center;
@@ -286,6 +292,7 @@ export component TabContent inherits VerticalBox {
 
             if programs.length == 0 && is-loaded: Text {
                 text: empty-text;
+                font-family: "Segoe UI";
                 color: #888888;
                 horizontal-alignment: center;
                 vertical-alignment: center;
@@ -293,6 +300,7 @@ export component TabContent inherits VerticalBox {
 
             if !is-loaded: Text {
                 text: loading-text;
+                font-family: "Segoe UI";
                 color: #888888;
                 horizontal-alignment: center;
                 vertical-alignment: center;
@@ -327,6 +335,7 @@ export component TabContent inherits VerticalBox {
                         text: episode.title;
                         font-size: 14px;
                         font-weight: 600;
+                        font-family: "Segoe UI";
                         color: #ffffff;
                     }
 
@@ -336,18 +345,21 @@ export component TabContent inherits VerticalBox {
                         Text {
                             text: episode.publish-date;
                             font-size: 11px;
+                            font-family: "Segoe UI";
                             color: #aaaaaa;
                         }
 
                         Text {
                             text: format-duration(episode.duration);
                             font-size: 11px;
+                            font-family: "Segoe UI";
                             color: #aaaaaa;
                         }
 
                         Text {
                             text: episode.file-size;
                             font-size: 11px;
+                            font-family: "Segoe UI";
                             color: #888888;
                         }
                     }
@@ -355,6 +367,7 @@ export component TabContent inherits VerticalBox {
                     if episode.description != "": Text {
                         text: episode.description;
                         font-size: 11px;
+                        font-family: "Segoe UI";
                         color: #999999;
                         wrap: word-wrap;
                         overflow: elide;
@@ -365,6 +378,7 @@ export component TabContent inherits VerticalBox {
 
             if episodes.length == 0 && is-loaded: Text {
                 text: empty-text;
+                font-family: "Segoe UI";
                 color: #888888;
                 horizontal-alignment: center;
                 vertical-alignment: center;
@@ -372,6 +386,7 @@ export component TabContent inherits VerticalBox {
 
             if !is-loaded: Text {
                 text: loading-text;
+                font-family: "Segoe UI";
                 color: #888888;
                 horizontal-alignment: center;
                 vertical-alignment: center;
@@ -388,6 +403,7 @@ export component TabContent inherits VerticalBox {
         Text {
             text: simple-text;
             font-size: 14px;
+            font-family: "Segoe UI";
             color: simple-text-color;
             horizontal-alignment: center;
             vertical-alignment: center;
