@@ -95,7 +95,7 @@ export component MainWindow inherits Window {
         has-podcasts: false
     };
 
-    // Tab management (0=Live, 1=Podcasts, 2=News, 3=Music)
+    // Tab management (0=Live, 1=Podcasts, 2=News, 3=Music, 4=Favorites)
     in-out property <int> current-tab: 0;
 
     // Data arrays for different tabs
@@ -103,6 +103,11 @@ export component MainWindow inherits Window {
     in-out property <[ProgramItem]> programs: [];  // For Podcasts tab
     in-out property <[ProgramItem]> news-programs: [];  // For News tab
     in-out property <[EpisodeItem]> episodes: [];
+    in-out property <[ChannelItem]> favorite-channels: [];  // For Favorites tab
+    in-out property <[ProgramItem]> favorite-programs: [];  // For Favorites tab
+
+    // Search functionality
+    in-out property <string> podcast-search-query: "";
 
     // View state for Podcasts/News tabs
     in-out property <string> selected-program-name: "";
@@ -140,6 +145,14 @@ export component MainWindow inherits Window {
     // Pagination (if needed)
     callback load-more-programs();
     callback window-moved(length, length);  // Callback for window dragging
+
+    // Search callback
+    callback search-programs(string);  // (search_query)
+
+    // Favorites callbacks
+    callback toggle-favorite-channel(int);  // (channel_id)
+    callback toggle-favorite-program(int);  // (program_id)
+    callback favorites-tab-clicked();
 
     // ================================================================
     // MAIN LAYOUT
@@ -495,6 +508,10 @@ export component MainWindow inherits Window {
                         // News tab
                         show-episodes-view = false;
                         news-tab-clicked();
+                    } else if (tab-id == 4) {
+                        // Favorites tab
+                        show-episodes-view = false;
+                        favorites-tab-clicked();
                     }
                     // For Live (0) and Music (3), just switching the tab is enough
                 }
@@ -511,42 +528,108 @@ export component MainWindow inherits Window {
             is-loaded: true;
             loading-text: "Loading channels...";
             empty-text: "No channels found";
+            show-favorite-buttons: true;
 
             channel-selected(id, url) => {
                 root.channel-selected(id, url);
             }
+
+            favorite-channel-clicked(id) => {
+                root.toggle-favorite-channel(id);
+            }
         }
 
-        // Podcasts Tab - Programs list or episodes
-        if current-tab == 1: TabContent {
-            // Switch between programs list and episodes view
-            show-back-button: show-episodes-view;
-            selected-program-name: root.selected-program-name;
+        // Podcasts Tab - Programs list or episodes with search
+        if current-tab == 1: VerticalBox {
+            spacing: 8px;
+            padding: 0px;
 
-            // Show either programs or episodes
-            is-programs-tab: !show-episodes-view;
-            is-episodes-tab: show-episodes-view;
+            // Search input (only shown when viewing programs list, not episodes)
+            if !show-episodes-view: HorizontalBox {
+                padding-left: 8px;
+                padding-right: 8px;
+                padding-top: 8px;
+                padding-bottom: 4px;
+                spacing: 8px;
 
-            programs: root.programs;
-            episodes: root.episodes;
-            is-loaded: programs-loaded;
-            loading-text: "Loading programs...";
-            empty-text: show-episodes-view ? "No episodes found" : "No programs found";
+                Rectangle {
+                    horizontal-stretch: 1;
+                    height: 32px;
+                    background: #1a1a1a;
+                    border-radius: 4px;
+                    border-width: 1px;
+                    border-color: #444444;
 
-            program-selected(id) => {
-                root.program-selected(id);
+                    HorizontalBox {
+                        padding-left: 8px;
+                        padding-right: 8px;
+                        spacing: 4px;
+
+                        // Search input
+                        Rectangle {
+                            horizontal-stretch: 1;
+
+                            TextInput {
+                                text <=> root.podcast-search-query;
+                                font-size: 14px;
+                                color: #ffffff;
+                                width: parent.width;
+                                height: parent.height;
+
+                                edited => {
+                                    root.search-programs(self.text);
+                                }
+                            }
+
+                            // Placeholder text (shown when input is empty)
+                            if root.podcast-search-query == "": Text {
+                                text: "Search podcasts...";
+                                font-size: 14px;
+                                color: #666666;
+                                vertical-alignment: center;
+                            }
+                        }
+                    }
+                }
             }
 
-            group-toggled(id) => {
-                root.group-toggled(id);
-            }
+            TabContent {
+                vertical-stretch: 1;
 
-            episode-selected(id) => {
-                root.episode-selected(id);
-            }
+                // Switch between programs list and episodes view
+                show-back-button: show-episodes-view;
+                selected-program-name: root.selected-program-name;
 
-            back-clicked => {
-                root.back-to-programs-clicked();
+                // Show either programs or episodes
+                is-programs-tab: !show-episodes-view;
+                is-episodes-tab: show-episodes-view;
+
+                programs: root.programs;
+                episodes: root.episodes;
+                is-loaded: programs-loaded;
+                loading-text: "Loading programs...";
+                empty-text: show-episodes-view ? "No episodes found" : "No programs found";
+                show-favorite-buttons: true;
+
+                program-selected(id) => {
+                    root.program-selected(id);
+                }
+
+                group-toggled(id) => {
+                    root.group-toggled(id);
+                }
+
+                episode-selected(id) => {
+                    root.episode-selected(id);
+                }
+
+                back-clicked => {
+                    root.back-to-programs-clicked();
+                }
+
+                favorite-program-clicked(id) => {
+                    root.toggle-favorite-program(id);
+                }
             }
         }
 
@@ -589,6 +672,74 @@ export component MainWindow inherits Window {
             simple-text: "Music content coming soon...";
             simple-text-color: #888888;
             is-loaded: true;
+        }
+
+        // Favorites Tab - Shows favorite channels and programs
+        if current-tab == 4: VerticalBox {
+            spacing: 8px;
+            padding: 8px;
+
+            // Favorite Channels Section
+            if favorite-channels.length > 0: VerticalBox {
+                spacing: 4px;
+
+                HorizontalBox {
+                    padding-left: 4px;
+                    Text {
+                        text: "Favorite Channels";
+                        font-size: 16px;
+                        font-weight: 700;
+                        color: #ffffff;
+                    }
+                }
+
+                TabContent {
+                    is-channels-tab: true;
+                    channels: root.favorite-channels;
+                    is-loaded: true;
+                    empty-text: "";
+
+                    channel-selected(id, url) => {
+                        root.channel-selected(id, url);
+                    }
+                }
+            }
+
+            // Favorite Programs Section
+            if favorite-programs.length > 0: VerticalBox {
+                spacing: 4px;
+
+                HorizontalBox {
+                    padding-left: 4px;
+                    Text {
+                        text: "Favorite Podcasts";
+                        font-size: 16px;
+                        font-weight: 700;
+                        color: #ffffff;
+                    }
+                }
+
+                TabContent {
+                    is-programs-tab: true;
+                    programs: root.favorite-programs;
+                    is-loaded: true;
+                    empty-text: "";
+
+                    program-selected(id) => {
+                        root.program-selected(id);
+                    }
+                }
+            }
+
+            // Empty state when no favorites
+            if favorite-channels.length == 0 && favorite-programs.length == 0: Text {
+                text: "No favorites yet\n\nClick the star icon on channels or podcasts to add them to your favorites.";
+                font-size: 14px;
+                color: #888888;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+                wrap: word-wrap;
+            }
         }
         } // end tab navigation VerticalBox
     } // end main VerticalBox

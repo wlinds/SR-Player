@@ -15,6 +15,7 @@ export struct ChannelItem {
     id: int,               // Channel ID (e.g., 132 for SR P1)
     name: string,          // Channel display name (e.g., "SR P1")
     stream-url: string,    // URL to the MP3 stream
+    is-favorite: bool,     // Whether this channel is favorited
 }
 
 // ================================================================
@@ -39,6 +40,7 @@ export struct ProgramItem {
     description: string,       // Program description
     image: image,              // Program logo/image
     has-pod: bool,             // Has podcast episodes
+    is-favorite: bool,         // Whether this program is favorited
 
     // Group-related properties (for collapsible sections like P4 Local News)
     is-group: bool,            // True if this is a group header

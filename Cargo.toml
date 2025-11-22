@@ -1,6 +1,6 @@
 [package]
 name = "sr-player"
-version = "0.1.0"
+version = "0.5.4"
 edition = "2021"
 
 [dependencies]
@@ -25,6 +25,7 @@ crossbeam-channel = "0.5"
 chrono = "0.4"
 chrono-tz = "0.10"
 image = "0.25"
+dirs = "5.0"
 
 [build-dependencies]
 slint-build = "1.9"

@@ -24,6 +24,7 @@ pub mod api;
 pub mod channel_pool;
 pub mod dvr_buffer;
 pub mod episode_cache;
+pub mod favorites;
 pub mod file_player;
 pub mod file_player_send_safe;
 pub mod gapless_send_safe;

@@ -100,6 +100,7 @@ pub fn programs_to_items_podcasts(programs: &[Program]) -> Vec<ProgramItem> {
                 description: description.into(),
                 image: Image::default(),
                 has_pod: program.has_pod,
+                is_favorite: false, // Will be updated by favorites callback
                 is_group: false,
                 is_expanded: true, // Regular programs are always visible
                 is_child: false,
@@ -149,6 +150,7 @@ pub fn programs_to_items_news(
             description: "".into(),
             image: Image::default(),
             has_pod: true,
+            is_favorite: false, // Groups cannot be favorited
             is_group: true,
             is_expanded: true, // Group headers are always visible
             is_child: false,
@@ -166,6 +168,7 @@ pub fn programs_to_items_news(
                         description: "News podcasts".into(),
                         image: Image::default(),
                         has_pod: program.has_pod,
+                        is_favorite: false, // Will be updated by favorites callback
                         is_group: false,
                         is_expanded: ekot_expanded, // Child visibility depends on parent group state
                         is_child: true,
@@ -189,6 +192,7 @@ pub fn programs_to_items_news(
             description: "".into(),
             image: Image::default(),
             has_pod: true,
+            is_favorite: false, // Groups cannot be favorited
             is_group: true,
             is_expanded: true, // Group headers are always visible
             is_child: false,
@@ -211,6 +215,7 @@ pub fn programs_to_items_news(
                         description: "Local news podcasts".into(),
                         image: Image::default(),
                         has_pod: program.has_pod,
+                        is_favorite: false, // Will be updated by favorites callback
                         is_group: false,
                         is_expanded: p4_expanded, // Child visibility depends on parent group state
                         is_child: true,

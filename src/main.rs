@@ -37,6 +37,7 @@ mod core; // This loads src/core/mod.rs
 use core::api::SrApiClient;
 use core::channel_pool::ChannelPool;
 use core::episode_cache::EpisodeCache;
+use core::favorites::Favorites;
 use core::file_player_send_safe::SendSafeFilePlayer;
 use core::gapless_send_safe::SendSafeGaplessPlayer;
 use core::utils::{bytes_to_slint_image, fetch_image_bytes, parse_sr_date_to_time};
@@ -67,6 +68,7 @@ macro_rules! setup_tab_loader {
         api_client = $api:expr,
         all_programs = $all_programs:expr,
         groups_expanded = $groups_expanded:expr,
+        favorites = $favorites:expr,
         callback = $callback:ident,
         filter = $filter_fn:expr,
         set_model = $set_model:expr,
@@ -77,6 +79,7 @@ macro_rules! setup_tab_loader {
         let api_client_clone = $api.clone();
         let all_programs_clone = $all_programs.clone();
         let groups_expanded_clone = $groups_expanded.clone();
+        let favorites_clone = $favorites.clone();
 
         $ui.$callback(move || {
             let ui = ui_weak.upgrade().unwrap();
@@ -91,7 +94,12 @@ macro_rules! setup_tab_loader {
                 // Use cached data
                 let all_programs_lock = all_programs_clone.lock().unwrap();
                 let groups_expanded_lock = groups_expanded_clone.lock().unwrap();
-                let program_items = $filter_fn(&all_programs_lock, &groups_expanded_lock);
+                let favorites_lock = favorites_clone.lock().unwrap();
+                let mut program_items = $filter_fn(&all_programs_lock, &groups_expanded_lock);
+                // Apply favorite status from persistence
+                for item in &mut program_items {
+                    item.is_favorite = favorites_lock.is_program_favorite(item.id);
+                }
                 let programs_model = Rc::new(VecModel::from(program_items));
                 $set_model(&ui, ModelRc::from(programs_model));
             } else {
@@ -100,6 +108,7 @@ macro_rules! setup_tab_loader {
                 let api_clone = api_client_clone.clone();
                 let all_programs_clone2 = all_programs_clone.clone();
                 let groups_expanded_clone2 = groups_expanded_clone.clone();
+                let favorites_clone2 = favorites_clone.clone();
 
                 runtime_handle.spawn(async move {
                     match core::podcast::fetch_programs_with_podcasts(&api_clone).await {
@@ -113,7 +122,13 @@ macro_rules! setup_tab_loader {
                             // Update UI
                             if let Err(e) = ui_clone.upgrade_in_event_loop(move |ui| {
                                 let groups_expanded_lock = groups_expanded_clone2.lock().unwrap();
-                                let program_items = $filter_fn(&programs, &groups_expanded_lock);
+                                let favorites_lock = favorites_clone2.lock().unwrap();
+                                let mut program_items =
+                                    $filter_fn(&programs, &groups_expanded_lock);
+                                // Apply favorite status from persistence
+                                for item in &mut program_items {
+                                    item.is_favorite = favorites_lock.is_program_favorite(item.id);
+                                }
                                 let programs_model = Rc::new(VecModel::from(program_items));
                                 $set_model(&ui, ModelRc::from(programs_model));
                                 $set_loaded(&ui);
@@ -215,6 +230,7 @@ fn program_info_from_episode(
 /// Initialize channels from API and return both channel map and UI model
 fn initialize_channels(
     channels: &[core::models::Channel],
+    favorites: &Favorites,
 ) -> (HashMap<i32, String>, ModelRc<ChannelItem>) {
     // Create HashMap for O(1) channel name lookups
     let channel_map: HashMap<i32, String> = channels
@@ -222,7 +238,7 @@ fn initialize_channels(
         .filter_map(|ch| i32::try_from(ch.id).ok().map(|id| (id, ch.name.clone())))
         .collect();
 
-    // Convert to UI model
+    // Convert to UI model with favorite status
     let channel_items: Vec<ChannelItem> = channels
         .iter()
         .filter_map(|channel| {
@@ -230,6 +246,7 @@ fn initialize_channels(
                 id,
                 name: channel.name.clone().into(),
                 stream_url: channel.live_audio.url.clone().into(),
+                is_favorite: favorites.is_channel_favorite(id),
             })
         })
         .collect();
@@ -374,19 +391,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Backend components initialized");
 
     // ========================================================================
-    // STEP 3: FETCH AND DISPLAY CHANNELS
-    // ========================================================================
-
-    // Fetch and initialize channels
-    println!("Fetching channels from Sveriges Radio API...");
-    let channels = api_client.get_channels()?;
-    println!("Fetched {} channels", channels.len());
-
-    let (channel_map, channels_model) = initialize_channels(&channels);
-    ui.set_channels(channels_model);
-    println!("Channels loaded into UI");
-
-    // ========================================================================
     // SHARED STATE FOR GROUP MANAGEMENT AND INFINITE SCROLLING
     // ========================================================================
 
@@ -398,6 +402,37 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Track the currently playing channel ID for periodic program updates
     let current_channel_id = Arc::new(std::sync::Mutex::new(Option::<i32>::None));
+
+    // Load favorites from disk
+    let favorites = Arc::new(std::sync::Mutex::new(Favorites::load()));
+    println!("Favorites loaded from disk");
+
+    // ========================================================================
+    // STEP 3: FETCH AND DISPLAY CHANNELS
+    // ========================================================================
+
+    // Fetch and initialize channels
+    println!("Fetching channels from Sveriges Radio API...");
+    let channels = api_client.get_channels()?;
+    println!("Fetched {} channels", channels.len());
+
+    // Initialize channels with favorite status from loaded favorites
+    let (channel_map, channels_model) = {
+        let favorites_lock = favorites.lock().unwrap();
+        initialize_channels(&channels, &favorites_lock)
+    };
+    ui.set_channels(channels_model.clone());
+
+    // Set up initial favorite channels list for Favorites tab
+    {
+        let favorites_lock = favorites.lock().unwrap();
+        let favorite_channels: Vec<ChannelItem> = (0..channels_model.row_count())
+            .filter_map(|i| channels_model.row_data(i))
+            .filter(|ch| favorites_lock.is_channel_favorite(ch.id))
+            .collect();
+        ui.set_favorite_channels(ModelRc::from(Rc::new(VecModel::from(favorite_channels))));
+    }
+    println!("Channels loaded into UI");
 
     // ========================================================================
     // STEP 4: SET UP UI CALLBACKS (EVENT HANDLERS)
@@ -1028,6 +1063,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         api_client = api_client,
         all_programs = all_programs,
         groups_expanded = groups_expanded,
+        favorites = favorites,
         callback = on_podcasts_tab_clicked,
         filter = |programs, _groups| core::podcast::programs_to_items_podcasts(programs),
         set_model = |ui: &MainWindow, model| ui.set_programs(model),
@@ -1041,6 +1077,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         api_client = api_client,
         all_programs = all_programs,
         groups_expanded = groups_expanded,
+        favorites = favorites,
         callback = on_news_tab_clicked,
         filter = core::podcast::programs_to_items_news,
         set_model = |ui: &MainWindow, model| ui.set_news_programs(model),
@@ -1273,7 +1310,159 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     }
 
-    // CALLBACK 10: Window dragging (for frameless window)
+    // CALLBACK 10: Search programs
+    {
+        let ui_weak = ui.as_weak();
+        let all_programs_clone = all_programs.clone();
+
+        ui.on_search_programs(move |search_query| {
+            let Some(ui) = ui_weak.upgrade() else { return };
+
+            let query = search_query.to_lowercase();
+            let all_programs_lock = all_programs_clone.lock().unwrap();
+
+            // Filter programs based on search query
+            let filtered_programs: Vec<ProgramItem> = if query.is_empty() {
+                // Show all podcasts if search is empty
+                core::podcast::programs_to_items_podcasts(&all_programs_lock)
+            } else {
+                // Filter programs by name or description
+                core::podcast::programs_to_items_podcasts(&all_programs_lock)
+                    .into_iter()
+                    .filter(|program| {
+                        program.name.to_lowercase().contains(&query)
+                            || program.description.to_lowercase().contains(&query)
+                    })
+                    .collect()
+            };
+
+            let programs_model = Rc::new(VecModel::from(filtered_programs));
+            ui.set_programs(ModelRc::from(programs_model));
+        });
+    }
+
+    // CALLBACK 11: Toggle favorite channel
+    {
+        let ui_weak = ui.as_weak();
+        let favorites_clone = favorites.clone();
+
+        ui.on_toggle_favorite_channel(move |channel_id| {
+            println!("Toggle favorite channel: {}", channel_id);
+            let Some(ui) = ui_weak.upgrade() else { return };
+
+            // Toggle in persistence and get new state
+            let is_now_favorite = {
+                let mut favorites_lock = favorites_clone.lock().unwrap();
+                let result = favorites_lock.toggle_channel(channel_id);
+                // Save to disk
+                if let Err(e) = favorites_lock.save() {
+                    eprintln!("Failed to save favorites: {}", e);
+                }
+                result
+            };
+
+            let channels = ui.get_channels();
+            for i in 0..channels.row_count() {
+                if let Some(mut channel) = channels.row_data(i) {
+                    if channel.id == channel_id {
+                        channel.is_favorite = is_now_favorite;
+                        channels.set_row_data(i, channel.clone());
+
+                        // Update favorites list
+                        if is_now_favorite {
+                            let favorites = ui.get_favorite_channels();
+                            let favorites_vec: Vec<ChannelItem> = (0..favorites.row_count())
+                                .filter_map(|j| favorites.row_data(j))
+                                .collect();
+                            let mut new_favorites = favorites_vec;
+                            new_favorites.push(channel.clone());
+                            ui.set_favorite_channels(ModelRc::from(Rc::new(VecModel::from(
+                                new_favorites,
+                            ))));
+                        } else {
+                            let favorites = ui.get_favorite_channels();
+                            let favorites_vec: Vec<ChannelItem> = (0..favorites.row_count())
+                                .filter_map(|j| favorites.row_data(j))
+                                .filter(|c| c.id != channel_id)
+                                .collect();
+                            ui.set_favorite_channels(ModelRc::from(Rc::new(VecModel::from(
+                                favorites_vec,
+                            ))));
+                        }
+                        break;
+                    }
+                }
+            }
+        });
+    }
+
+    // CALLBACK 12: Toggle favorite program
+    {
+        let ui_weak = ui.as_weak();
+        let favorites_clone = favorites.clone();
+
+        ui.on_toggle_favorite_program(move |program_id| {
+            println!("Toggle favorite program: {}", program_id);
+            let Some(ui) = ui_weak.upgrade() else { return };
+
+            // Toggle in persistence and get new state
+            let is_now_favorite = {
+                let mut favorites_lock = favorites_clone.lock().unwrap();
+                let result = favorites_lock.toggle_program(program_id);
+                // Save to disk
+                if let Err(e) = favorites_lock.save() {
+                    eprintln!("Failed to save favorites: {}", e);
+                }
+                result
+            };
+
+            let programs = ui.get_programs();
+            for i in 0..programs.row_count() {
+                if let Some(mut program) = programs.row_data(i) {
+                    if program.id == program_id {
+                        program.is_favorite = is_now_favorite;
+                        programs.set_row_data(i, program.clone());
+
+                        // Update favorites list
+                        if is_now_favorite {
+                            let favorites = ui.get_favorite_programs();
+                            let favorites_vec: Vec<ProgramItem> = (0..favorites.row_count())
+                                .filter_map(|j| favorites.row_data(j))
+                                .collect();
+                            let mut new_favorites = favorites_vec;
+                            new_favorites.push(program.clone());
+                            ui.set_favorite_programs(ModelRc::from(Rc::new(VecModel::from(
+                                new_favorites,
+                            ))));
+                        } else {
+                            let favorites = ui.get_favorite_programs();
+                            let favorites_vec: Vec<ProgramItem> = (0..favorites.row_count())
+                                .filter_map(|j| favorites.row_data(j))
+                                .filter(|p| p.id != program_id)
+                                .collect();
+                            ui.set_favorite_programs(ModelRc::from(Rc::new(VecModel::from(
+                                favorites_vec,
+                            ))));
+                        }
+                        break;
+                    }
+                }
+            }
+        });
+    }
+
+    // CALLBACK 13: Favorites tab clicked
+    {
+        let _ui_weak = ui.as_weak();
+
+        ui.on_favorites_tab_clicked(move || {
+            println!("Favorites tab clicked");
+            // Favorites are already populated by toggle callbacks
+            // No need to load anything here
+        });
+    }
+
+    // CALLBACK 14: Window dragging (for frameless window)
     {
         let ui_weak = ui.as_weak();
 

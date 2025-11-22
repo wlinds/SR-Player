@@ -28,11 +28,14 @@ component ListItem inherits Rectangle {
     in property <bool> is-child: false;
     in property <bool> is-expanded: false;
     in property <string> expand-icon: "▶";
+    in property <bool> is-favorite: false;
+    in property <bool> show-favorite-button: false;
 
     // ================================================================
     // CALLBACKS
     // ================================================================
     callback clicked();
+    callback favorite-clicked();
 
     // ================================================================
     // VISUAL STYLING
@@ -40,11 +43,6 @@ component ListItem inherits Rectangle {
     min-height: item-height * 1px;
     background: background-color;
     border-radius: 4px;
-
-    // Touch area for click detection
-    touch-area := TouchArea {
-        clicked => { root.clicked(); }
-    }
 
     // ================================================================
     // LAYOUT
@@ -64,24 +62,56 @@ component ListItem inherits Rectangle {
             vertical-alignment: center;
         }
 
-        // Main content area
-        VerticalLayout {
-            spacing: 2px;
-            alignment: center;
+        // Main content area with clickable region
+        Rectangle {
+            horizontal-stretch: 1;
 
-            // Title with indentation for child items
-            Text {
-                text: is-child ? "  " + title : title;
-                font-size: is-group ? 16px : 14px;
-                font-weight: is-group ? 700 : 600;
-                color: is-group ? #ffffff : (is-child ? #e0e0e0 : #ffffff);
+            // Touch area for main content (excludes favorite button)
+            touch-area := TouchArea {
+                clicked => { root.clicked(); }
             }
 
-            // Optional subtitle (for descriptions, dates, etc.)
-            if subtitle != "": Text {
-                text: subtitle;
-                font-size: 11px;
-                color: #aaaaaa;
+            VerticalLayout {
+                spacing: 2px;
+                alignment: center;
+
+                // Title with indentation for child items
+                Text {
+                    text: is-child ? "  " + title : title;
+                    font-size: is-group ? 16px : 14px;
+                    font-weight: is-group ? 700 : 600;
+                    color: is-group ? #ffffff : (is-child ? #e0e0e0 : #ffffff);
+                }
+
+                // Optional subtitle (for descriptions, dates, etc.)
+                if subtitle != "": Text {
+                    text: subtitle;
+                    font-size: 11px;
+                    color: #aaaaaa;
+                }
+            }
+        }
+
+        // Favorite button
+        if show-favorite-button: Rectangle {
+            width: 32px;
+
+            // Separate touch area for favorite button
+            favorite-touch := TouchArea {
+                width: parent.width;
+                mouse-cursor: pointer;
+
+                clicked => {
+                    root.favorite-clicked();
+                }
+            }
+
+            Text {
+                text: is-favorite ? "★" : "☆";
+                font-size: 20px;
+                color: is-favorite ? #EFA669 : #666666;
+                vertical-alignment: center;
+                horizontal-alignment: center;
             }
         }
     }
@@ -118,6 +148,9 @@ export component TabContent inherits VerticalBox {
     in property <string> simple-text: "";
     in property <color> simple-text-color: #888888;
 
+    // Favorites
+    in property <bool> show-favorite-buttons: false;
+
     // ================================================================
     // CALLBACKS
     // ================================================================
@@ -135,6 +168,10 @@ export component TabContent inherits VerticalBox {
     // Navigation callback for episodes view
     callback back-clicked();
 
+    // Favorites callbacks
+    callback favorite-channel-clicked(int);  // Parameters: (channel_id)
+    callback favorite-program-clicked(int);  // Parameters: (program_id)
+
     // Helper function to format duration from seconds to MM:SS or HH:MM:SS
     pure function format-duration(seconds: int) -> string {
         if seconds < 3600 {
@@ -143,6 +180,7 @@ export component TabContent inherits VerticalBox {
             return Math.floor(seconds / 3600) + ":" + Math.floor(Math.mod(seconds, 3600) / 60) + ":" + Math.mod(seconds, 60);
         }
     }
+
 
     // ================================================================
     // LAYOUT
@@ -182,12 +220,15 @@ export component TabContent inherits VerticalBox {
 
             for channel[index] in channels: ListItem {
                 title: channel.name;
-                has-hover: channel-touch.has-hover;
+                show-favorite-button: show-favorite-buttons;
+                is-favorite: channel.is-favorite;
 
-                channel-touch := TouchArea {
-                    clicked => {
-                        channel-selected(channel.id, channel.stream-url);
-                    }
+                clicked => {
+                    channel-selected(channel.id, channel.stream-url);
+                }
+
+                favorite-clicked => {
+                    favorite-channel-clicked(channel.id);
                 }
             }
 
@@ -224,16 +265,19 @@ export component TabContent inherits VerticalBox {
                 is-child: program.is-child;
                 expand-icon: program.group-expanded ? "▼" : "▶";
                 item-height: program.is-group ? 60 : 50;
-                has-hover: program-touch.has-hover;
+                show-favorite-button: show-favorite-buttons && !program.is-group;
+                is-favorite: program.is-favorite;
 
-                program-touch := TouchArea {
-                    clicked => {
-                        if (program.is-group) {
-                            group-toggled(program.id);
-                        } else {
-                            program-selected(program.id);
-                        }
+                clicked => {
+                    if (program.is-group) {
+                        group-toggled(program.id);
+                    } else {
+                        program-selected(program.id);
                     }
+                }
+
+                favorite-clicked => {
+                    favorite-program-clicked(program.id);
                 }
             }
 
