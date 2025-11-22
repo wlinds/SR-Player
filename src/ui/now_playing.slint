@@ -60,34 +60,41 @@ export component NowPlaying inherits Rectangle {
 
             // Program text details
             Rectangle {
-                // Program title
+                // Program title (wraps for long podcast episode names)
                 Text {
                     text: current-program.title;
                     font-size: 16px;
                     font-weight: 600;
+                    font-family: "Segoe UI";
                     color: #e0e0e0;
+                    wrap: word-wrap;
+                    overflow: elide;
                     x: 0px;
                     y: 0px;
+                    width: parent.width;
+                    max-height: 40px;
                 }
 
-                // Time range (e.g., "09:00 - 12:00")
+                // Time range (e.g., "09:00 - 12:00") - positioned below title
                 if current-program.start-time != "": Text {
                     text: current-program.start-time + " - " + current-program.end-time;
                     font-size: 12px;
+                    font-family: "Segoe UI";
                     color: #aaaaaa;
                     x: 0px;
-                    y: 18px;
+                    y: 44px;
                 }
 
                 // Program description (truncated if too long)
                 if current-program.description != "": Text {
                     text: current-program.description;
                     font-size: 12px;
+                    font-family: "Segoe UI";
                     color: #999999;
                     wrap: word-wrap;
                     overflow: elide;
                     x: 0px;
-                    y: 36px;
+                    y: 62px;
                     width: parent.width;
                     max-height: 40px;
                 }
@@ -112,6 +119,7 @@ export component NowPlaying inherits Rectangle {
             color: #ffffff;
             font-size: 10px;
             font-weight: 700;
+            font-family: "Segoe UI";
             horizontal-alignment: center;
             vertical-alignment: center;
         }
