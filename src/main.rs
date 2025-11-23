@@ -378,8 +378,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let current_episode_url: Arc<std::sync::Mutex<Option<String>>> =
         Arc::new(std::sync::Mutex::new(None));
 
-    // Track which player is active (true = file_player, false = streaming/channel_pool)
-    let using_file_player: Arc<std::sync::Mutex<bool>> = Arc::new(std::sync::Mutex::new(false));
+    // Track which player is currently active
+    #[derive(Clone, Copy, PartialEq, Debug)]
+    enum ActivePlayer {
+        None,
+        ChannelPool,  // Live radio via channel pool
+        FilePlayer,   // Downloaded episode playback
+        Streaming,    // Podcast streaming playback
+    }
+    let active_player: Arc<std::sync::Mutex<ActivePlayer>> =
+        Arc::new(std::sync::Mutex::new(ActivePlayer::None));
 
     // Initialize volume to match UI default (0.5 = 50%)
     // Note: UI uses logarithmic scale, so 0.5 slider = 0.25 actual volume
@@ -387,6 +395,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         channel_pool.set_volume(0.25).await;
     });
     file_player.set_volume(0.25);
+    streaming_player.set_volume(0.25);
 
     println!("Backend components initialized");
 
@@ -459,7 +468,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let pool = channel_pool.clone();
         let file_player_clone = file_player.clone();
         let streaming_player_clone = streaming_player.clone();
-        let using_file_player_clone = using_file_player.clone();
+        let active_player_clone = active_player.clone();
         let runtime_handle = runtime.handle().clone();
         let api_client_clone = api_client.clone();
         let channel_map_clone = channel_map.clone();
@@ -495,15 +504,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let pool_clone = pool.clone();
             let file_player_for_stop = file_player_clone.clone();
             let streaming_player_for_stop = streaming_player_clone.clone();
-            let using_file_for_stop = using_file_player_clone.clone();
+            let active_player_for_set = active_player_clone.clone();
 
             // Spawn async task to stop file player, fetch program info, and switch channel
             runtime_handle.spawn(async move {
                 // Stop both file player and streaming player (in case an episode is playing)
                 file_player_for_stop.stop();
                 streaming_player_for_stop.stop().await;
-                if let Ok(mut using_file) = using_file_for_stop.lock() {
-                    *using_file = false;
+
+                // Set active player to channel pool
+                if let Ok(mut player) = active_player_for_set.lock() {
+                    *player = ActivePlayer::ChannelPool;
                 }
                 // Fetch and display current program information
                 if let Some(episode) = fetch_program_info_for_channel(&api_clone, channel_id).await
@@ -550,45 +561,54 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let ui_weak = ui.as_weak();
         let channel_pool_clone = channel_pool.clone();
         let file_player_clone = file_player.clone();
-        let using_file_player_clone = using_file_player.clone();
+        let streaming_player_clone = streaming_player.clone();
+        let active_player_clone = active_player.clone();
         let runtime_handle = runtime.handle().clone();
 
         ui.on_play_pause_clicked(move || {
             let ui_clone = ui_weak.upgrade().unwrap();
             let is_playing = ui_clone.get_is_playing();
 
-            // Check which player is active
-            let is_using_file_player = using_file_player_clone
+            // Get active player
+            let current_player = active_player_clone
                 .lock()
                 .ok()
-                .map(|f| *f)
-                .unwrap_or(false);
+                .map(|p| *p)
+                .unwrap_or(ActivePlayer::None);
 
             if is_playing {
                 // Pause playback
-                println!("Pausing playback");
-                if is_using_file_player {
-                    file_player_clone.pause();
-                } else {
-                    let pool = channel_pool_clone.clone();
-                    runtime_handle.spawn(async move {
-                        pool.pause().await;
-                    });
+                println!("Pausing {:?}", current_player);
+                match current_player {
+                    ActivePlayer::FilePlayer => file_player_clone.pause(),
+                    ActivePlayer::Streaming => {
+                        let streaming = streaming_player_clone.clone();
+                        runtime_handle.spawn(async move { streaming.pause(); });
+                    }
+                    ActivePlayer::ChannelPool => {
+                        let pool = channel_pool_clone.clone();
+                        runtime_handle.spawn(async move { pool.pause().await; });
+                    }
+                    ActivePlayer::None => {}
                 }
                 ui_clone.set_is_playing(false);
             } else {
                 // Resume playback (or do nothing if no channel selected)
                 let channel_name = ui_clone.get_current_channel_name();
 
-                if channel_name != "No channel selected" {
-                    println!("Resuming playback");
-                    if is_using_file_player {
-                        file_player_clone.resume();
-                    } else {
-                        let pool = channel_pool_clone.clone();
-                        runtime_handle.spawn(async move {
-                            pool.resume().await;
-                        });
+                if channel_name != "No channel selected" && current_player != ActivePlayer::None {
+                    println!("Resuming {:?}", current_player);
+                    match current_player {
+                        ActivePlayer::FilePlayer => file_player_clone.resume(),
+                        ActivePlayer::Streaming => {
+                            let streaming = streaming_player_clone.clone();
+                            runtime_handle.spawn(async move { streaming.resume(); });
+                        }
+                        ActivePlayer::ChannelPool => {
+                            let pool = channel_pool_clone.clone();
+                            runtime_handle.spawn(async move { pool.resume().await; });
+                        }
+                        ActivePlayer::None => {}
                     }
                     ui_clone.set_is_playing(true);
                 } else {
@@ -602,6 +622,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     {
         let channel_pool_clone = channel_pool.clone();
         let file_player_clone = file_player.clone();
+        let streaming_player_clone = streaming_player.clone();
         let runtime_handle = runtime.handle().clone();
 
         ui.on_volume_changed(move |volume| {
@@ -610,6 +631,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 pool.set_volume(volume).await;
             });
             file_player_clone.set_volume(volume);
+            streaming_player_clone.set_volume(volume);
         });
     }
 
@@ -621,7 +643,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let streaming_player_clone = streaming_player.clone();
         let file_player_clone = file_player.clone();
         let channel_pool_clone = channel_pool.clone();
-        let using_file_player_clone = using_file_player.clone();
+        let active_player_clone = active_player.clone();
         let runtime_handle = runtime.handle().clone();
 
         ui.on_seek_to_position(move |position| {
@@ -660,7 +682,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let player_clone = file_player_clone.clone();
                 let streaming_clone = streaming_player_clone.clone();
                 let pool_clone = channel_pool_clone.clone();
-                let using_file_clone = using_file_player_clone.clone();
+                let active_player_for_set = active_player_clone.clone();
                 let ui_weak_clone = ui_weak.clone();
 
                 runtime_handle.spawn(async move {
@@ -690,9 +712,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         Ok(_) => {
                             println!("Successfully seeked to {}s", position);
 
-                            // Mark that we're now using file player
-                            if let Ok(mut using_file) = using_file_clone.lock() {
-                                *using_file = true;
+                            // Switch to file player
+                            if let Ok(mut player) = active_player_for_set.lock() {
+                                *player = ActivePlayer::FilePlayer;
                             }
 
                             // Update UI
@@ -714,7 +736,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 // Switch to file player for time-shifted playback while keeping live stream running
                 let pool_clone2 = channel_pool_clone.clone();
                 let file_player_clone2 = file_player_clone.clone();
-                let using_file_clone2 = using_file_player_clone.clone();
+                let active_player_for_dvr = active_player_clone.clone();
 
                 // Get program info before spawning (while we have ui_handle)
                 let program_duration = ui_handle.get_program_duration();
@@ -855,8 +877,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         file_player_clone2.stop();
                         pool_clone2.resume().await;
 
-                        if let Ok(mut using_file) = using_file_clone2.lock() {
-                            *using_file = false;
+                        if let Ok(mut player) = active_player_for_dvr.lock() {
+                            *player = ActivePlayer::ChannelPool;
                         }
 
                         // Set position to current live position
@@ -892,8 +914,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     Ok(_) => {
                                         println!("Time-shifted playback started at program position {:.1}s", clamped_position);
 
-                                        if let Ok(mut using_file) = using_file_clone2.lock() {
-                                            *using_file = true;
+                                        if let Ok(mut player) = active_player_for_dvr.lock() {
+                                            *player = ActivePlayer::FilePlayer;
                                         }
 
                                         let _ = ui_weak_clone.upgrade_in_event_loop(move |ui| {
@@ -906,7 +928,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         // and automatically switch back to live streaming
                                         let file_player_monitor = file_player_clone2.clone();
                                         let pool_monitor = pool_clone2.clone();
-                                        let using_file_monitor = using_file_clone2.clone();
+                                        let active_player_monitor = active_player_for_dvr.clone();
                                         let ui_weak_monitor = ui_weak_clone.clone();
 
                                         tokio::spawn(async move {
@@ -919,8 +941,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                                                 // Check if we're still using file player
                                                 let still_using_file = {
-                                                    if let Ok(using_file) = using_file_monitor.lock() {
-                                                        *using_file
+                                                    if let Ok(player) = active_player_monitor.lock() {
+                                                        *player == ActivePlayer::FilePlayer
                                                     } else {
                                                         break;
                                                     }
@@ -939,8 +961,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                     file_player_monitor.stop();
                                                     pool_monitor.resume().await;
 
-                                                    if let Ok(mut using_file) = using_file_monitor.lock() {
-                                                        *using_file = false;
+                                                    if let Ok(mut player) = active_player_monitor.lock() {
+                                                        *player = ActivePlayer::ChannelPool;
                                                     }
 
                                                     // Update UI to show we're back at live
@@ -1110,7 +1132,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let file_player_clone = file_player.clone();
         let episode_cache_clone = episode_cache.clone();
         let current_episode_url_clone = current_episode_url.clone();
-        let using_file_player_clone = using_file_player.clone();
+        let active_player_clone = active_player.clone();
         let runtime_handle = runtime.handle().clone();
         let all_programs_clone = all_programs.clone();
         let current_channel_id_clone = current_channel_id.clone();
@@ -1194,7 +1216,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let file_clone = file_player_clone.clone();
             let streaming_for_stop = streaming_player_clone.clone();
             let streaming_for_playback = streaming_player_clone.clone();
-            let using_file_clone = using_file_player_clone.clone();
+            let active_player_for_set = active_player_clone.clone();
             let episode_cache_for_download = episode_cache_clone.clone();
             let ui_weak_for_download = ui_weak.clone();
             let ui_weak_for_playback = ui_weak.clone();
@@ -1207,9 +1229,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 file_clone.stop();
                 streaming_for_stop.stop().await;
 
-                // Reset player tracking flag
-                if let Ok(mut using_file) = using_file_clone.lock() {
-                    *using_file = false;
+                // Set active player to streaming
+                if let Ok(mut player) = active_player_for_set.lock() {
+                    *player = ActivePlayer::Streaming;
                 }
 
                 // Start background download for seeking with progress tracking

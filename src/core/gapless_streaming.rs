@@ -502,7 +502,7 @@ impl GaplessPlayer {
             }
 
             // Connect to stream with retry logic
-            let Some(mut response) =
+            let Some((mut response, is_finite_stream)) =
                 Self::connect_with_retry(&client, &url, generation, &generation_check).await
             else {
                 return;
@@ -565,6 +565,7 @@ impl GaplessPlayer {
                     &buffer_start_time,
                     &mut bytes_downloaded,
                     start_time,
+                    is_finite_stream,
                 )
                 .await
                 {
@@ -597,7 +598,7 @@ impl GaplessPlayer {
                         }
 
                         // Reconnect
-                        let Some(new_response) =
+                        let Some((new_response, new_is_finite)) =
                             Self::connect_with_retry(&client, &url, generation, &generation_check)
                                 .await
                         else {
@@ -607,6 +608,8 @@ impl GaplessPlayer {
 
                         info!("Reconnected successfully, resuming stream...");
                         response = new_response;
+                        // Note: is_finite_stream should stay the same, but update just in case
+                        let _ = new_is_finite;
                         // Reset reconnect count on successful reconnection
                         reconnect_count = 0;
                     }
@@ -618,12 +621,13 @@ impl GaplessPlayer {
     }
 
     // Connect to HTTP stream with retry logic
+    // Returns (response, is_finite_stream) - is_finite_stream is true if Content-Length header is present
     async fn connect_with_retry(
         client: &reqwest::Client,
         url: &str,
         _generation: u64,
         _generation_check: &Arc<AtomicU64>,
-    ) -> Option<reqwest::Response> {
+    ) -> Option<(reqwest::Response, bool)> {
         const MAX_RETRIES: u32 = 3;
         let mut retry_count = 0;
         let mut retry_delay = Duration::from_millis(500);
@@ -649,7 +653,13 @@ impl GaplessPlayer {
                             elapsed
                         );
                     }
-                    return Some(resp);
+                    // Check if this is a finite stream (has Content-Length header)
+                    // Podcast files have Content-Length, live radio streams don't
+                    let is_finite = resp.content_length().is_some();
+                    if is_finite {
+                        info!("Detected finite stream (Content-Length: {:?})", resp.content_length());
+                    }
+                    return Some((resp, is_finite));
                 }
                 Ok(Err(e)) => {
                     // Connection error
@@ -711,8 +721,9 @@ impl GaplessPlayer {
                 Ok(None) | Err(_) => {
                     // Stream ended or error - attempt reconnection
                     error!("Stream interrupted while buffering, reconnecting...");
-                    *response =
+                    let (new_response, _) =
                         Self::connect_with_retry(client, url, generation, generation_check).await?;
+                    *response = new_response;
                     continue;
                 }
             }
@@ -741,6 +752,7 @@ impl GaplessPlayer {
         buffer_start_time: &Arc<Mutex<Option<Instant>>>,
         bytes_downloaded: &mut usize,
         start_time: Instant,
+        is_finite_stream: bool,
     ) -> Result<(), ()> {
         // Timeout for receiving chunks (detect stalled connections)
         // Short timeout to quickly detect VPN/network changes
@@ -794,11 +806,18 @@ impl GaplessPlayer {
                     }
                 }
                 Ok(Ok(None)) => {
-                    // Stream ended without error - this might be unexpected disconnection
-                    error!(
-                        "Stream ended unexpectedly (connection likely dropped) - will reconnect"
-                    );
-                    return Err(()); // Unexpected end, needs reconnect
+                    // Stream ended without error
+                    if is_finite_stream {
+                        // For finite streams (podcasts), this is normal end-of-file
+                        info!("Finite stream completed successfully (end of file)");
+                        return Ok(()); // Normal end, no reconnect needed
+                    } else {
+                        // For infinite streams (live radio), this is unexpected
+                        error!(
+                            "Stream ended unexpectedly (connection likely dropped) - will reconnect"
+                        );
+                        return Err(()); // Unexpected end, needs reconnect
+                    }
                 }
                 Ok(Err(e)) => {
                     // Network error while reading chunk

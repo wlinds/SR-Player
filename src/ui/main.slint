@@ -699,16 +699,32 @@ export component MainWindow inherits Window {
                 }
             }
 
-            // Show programs if any
-            if favorite-programs.length > 0: TabContent {
-                is-programs-tab: true;
+            // Show programs or episodes (depending on show-episodes-view state)
+            if favorite-programs.length > 0 || show-episodes-view: TabContent {
+                // Switch between programs list and episodes view
+                show-back-button: show-episodes-view;
+                selected-program-name: root.selected-program-name;
+
+                // Show either programs or episodes
+                is-programs-tab: !show-episodes-view;
+                is-episodes-tab: show-episodes-view;
+
                 programs: root.favorite-programs;
+                episodes: root.episodes;
                 is-loaded: true;
-                empty-text: "";
-                show-favorite-buttons: true;
+                empty-text: show-episodes-view ? "No episodes found" : "";
+                show-favorite-buttons: !show-episodes-view;
 
                 program-selected(id) => {
                     root.program-selected(id);
+                }
+
+                episode-selected(id) => {
+                    root.episode-selected(id);
+                }
+
+                back-clicked => {
+                    root.back-to-programs-clicked();
                 }
 
                 favorite-program-clicked(id) => {
