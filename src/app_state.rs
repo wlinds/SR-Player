@@ -125,10 +125,7 @@ impl AppState {
 
     /// Get current episode URL
     pub fn get_current_episode_url(&self) -> Option<String> {
-        self.current_episode_url
-            .lock()
-            .ok()
-            .and_then(|u| u.clone())
+        self.current_episode_url.lock().ok().and_then(|u| u.clone())
     }
 
     /// Set current channel ID (for program polling)

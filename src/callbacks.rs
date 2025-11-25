@@ -198,7 +198,10 @@ fn setup_channel_selection(
                 .await
             {
                 Ok(()) => {
-                    println!("Channel switch completed in {}ms", start.elapsed().as_millis());
+                    println!(
+                        "Channel switch completed in {}ms",
+                        start.elapsed().as_millis()
+                    );
                     let _ = ui_weak_clone.upgrade_in_event_loop(move |ui| {
                         ui.set_is_playing(true);
                         ui.set_is_loading(false);
@@ -263,7 +266,9 @@ fn setup_playback_controls(ui: &MainWindow, app_state: &AppState) {
         let state = app_state.clone();
 
         ui.on_seek_to_position(move |position| {
-            let Some(ui_handle) = ui_weak.upgrade() else { return };
+            let Some(ui_handle) = ui_weak.upgrade() else {
+                return;
+            };
 
             let ctx = core::seek_handler::SeekContext::from_ui(&ui_handle, position, &state);
             let state_inner = state.clone();
@@ -588,9 +593,9 @@ fn setup_episode_callback(ui: &MainWindow, app_state: &AppState) {
             state_inner.stop_all_players().await;
             state_inner.set_active_player(ActivePlayer::Streaming);
 
-            state_inner.episode_cache.start_download(
-                url_for_download,
-                move |downloaded, total| {
+            state_inner
+                .episode_cache
+                .start_download(url_for_download, move |downloaded, total| {
                     let percent = if total > 0 {
                         (downloaded as f64 / total as f64 * 100.0) as i32
                     } else {
@@ -613,8 +618,7 @@ fn setup_episode_callback(ui: &MainWindow, app_state: &AppState) {
                             ui.set_download_status(format!("Downloading ({}%)", percent).into());
                         }
                     });
-                },
-            );
+                });
 
             match state_inner
                 .streaming_player

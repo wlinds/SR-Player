@@ -87,6 +87,7 @@ export component MainWindow inherits Window {
     in-out property <float> playback-duration: 0.0;     // Total duration in seconds (episodes)
     in-out property <float> program-duration: 0.0;      // Total duration in seconds (live radio programs)
     in-out property <string> download-status: "";       // Download status message
+    in-out property <string> clipboard-status: "";      // Clipboard copy status message
     in-out property <float> buffer-depth: 0.0;          // DVR buffer depth in seconds
     in-out property <bool> is-live: true;               // True if at live edge, false if time-shifted
     in-out property <ProgramInfo> current-program: {
@@ -158,6 +159,9 @@ export component MainWindow inherits Window {
     callback toggle-favorite-program(int);  // (program_id)
     callback favorites-tab-clicked();
 
+    // Share callback
+    callback share-clicked(string);  // (episode_url)
+
     // ================================================================
     // MAIN LAYOUT
     // ================================================================
@@ -208,6 +212,10 @@ export component MainWindow inherits Window {
 
             browse-podcasts-clicked(program-id) => {
                 root.browse-podcasts-clicked(program-id);
+            }
+
+            share-clicked(episode-url) => {
+                root.share-clicked(episode-url);
             }
         }
 
@@ -371,6 +379,21 @@ export component MainWindow inherits Window {
 
                     Text {
                         text: download-status;
+                        color: #4CAF50;
+                        font-size: 10px;
+                    }
+                }
+
+                // Clipboard status (copied to clipboard)
+                if clipboard-status != "": HorizontalBox {
+                    padding-left: 8px;
+                    padding-right: 8px;
+                    padding-top: 0px;
+                    padding-bottom: 2px;
+                    alignment: center;
+
+                    Text {
+                        text: clipboard-status;
                         color: #4CAF50;
                         font-size: 10px;
                     }

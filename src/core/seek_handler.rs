@@ -39,11 +39,7 @@ impl SeekContext {
 }
 
 /// Handle seeking in a downloaded episode
-pub async fn seek_episode(
-    ctx: &SeekContext,
-    state: &AppState,
-    ui_weak: &slint::Weak<MainWindow>,
-) {
+pub async fn seek_episode(ctx: &SeekContext, state: &AppState, ui_weak: &slint::Weak<MainWindow>) {
     let Some(ref episode_url) = ctx.episode_url else {
         println!("No episode currently playing");
         return;
@@ -67,7 +63,11 @@ pub async fn seek_episode(
 
     // Play from downloaded file at seek position
     let position = ctx.position;
-    match state.file_player.play_from_bytes_at_position(data, position).await {
+    match state
+        .file_player
+        .play_from_bytes_at_position(data, position)
+        .await
+    {
         Ok(_) => {
             state.set_active_player(ActivePlayer::FilePlayer);
             let _ = ui_weak.upgrade_in_event_loop(move |ui| {
@@ -106,9 +106,10 @@ pub async fn seek_live_radio(
     let buffer_depth = buffer_newest - buffer_oldest;
 
     // Recalculate current live position using Stockholm timezone
-    let current_live_pos = calculate_program_position(&ctx.program_start_time, &ctx.program_end_time)
-        .map(|(pos, dur)| pos.max(0.0).min(dur))
-        .unwrap_or(ctx.program_duration);
+    let current_live_pos =
+        calculate_program_position(&ctx.program_start_time, &ctx.program_end_time)
+            .map(|(pos, dur)| pos.max(0.0).min(dur))
+            .unwrap_or(ctx.program_duration);
 
     let seekable_start = current_live_pos - buffer_depth;
     let seekable_end = current_live_pos;
@@ -130,16 +131,19 @@ pub async fn seek_live_radio(
     if seeking_to_live {
         seek_to_live_edge(state, ui_weak, clamped_position).await;
     } else {
-        seek_to_buffer_position(state, ui_weak, clamped_position, clamped_buffer_position, ctx.program_duration).await;
+        seek_to_buffer_position(
+            state,
+            ui_weak,
+            clamped_position,
+            clamped_buffer_position,
+            ctx.program_duration,
+        )
+        .await;
     }
 }
 
 /// Resume live streaming at the live edge
-async fn seek_to_live_edge(
-    state: &AppState,
-    ui_weak: &slint::Weak<MainWindow>,
-    position: f32,
-) {
+async fn seek_to_live_edge(state: &AppState, ui_weak: &slint::Weak<MainWindow>, position: f32) {
     state.file_player.stop();
     state.channel_pool.resume().await;
     state.set_active_player(ActivePlayer::ChannelPool);
@@ -159,14 +163,21 @@ async fn seek_to_buffer_position(
     buffer_position: f32,
     program_duration: f32,
 ) {
-    let buffer_data = state.channel_pool.get_buffer_data_from_offset(buffer_position).await;
+    let buffer_data = state
+        .channel_pool
+        .get_buffer_data_from_offset(buffer_position)
+        .await;
 
     match buffer_data {
         Ok(data) if !data.is_empty() => {
             state.file_player.stop();
             state.channel_pool.pause().await;
 
-            match state.file_player.play_from_bytes_at_position(bytes::Bytes::from(data), 0.0).await {
+            match state
+                .file_player
+                .play_from_bytes_at_position(bytes::Bytes::from(data), 0.0)
+                .await
+            {
                 Ok(_) => {
                     state.set_active_player(ActivePlayer::FilePlayer);
 

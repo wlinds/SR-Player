@@ -16,15 +16,30 @@ const SCHEDULE_CACHE_TTL: Duration = Duration::from_secs(30);
 const PROGRAMS_CACHE_TTL: Duration = Duration::from_secs(30 * 60);
 const EPISODES_CACHE_TTL: Duration = Duration::from_secs(60 * 60);
 
-struct CacheEntry<T> { data: T, fetched_at: Instant }
-
-impl<T> CacheEntry<T> {
-    fn new(data: T) -> Self { Self { data, fetched_at: Instant::now() } }
-    fn is_valid(&self, ttl: Duration) -> bool { self.fetched_at.elapsed() < ttl }
-    fn age_secs(&self) -> f32 { self.fetched_at.elapsed().as_secs_f32() }
+struct CacheEntry<T> {
+    data: T,
+    fetched_at: Instant,
 }
 
-struct ScheduleCache { data: Option<ScheduleRightNowResponse>, last_fetch: Option<Instant> }
+impl<T> CacheEntry<T> {
+    fn new(data: T) -> Self {
+        Self {
+            data,
+            fetched_at: Instant::now(),
+        }
+    }
+    fn is_valid(&self, ttl: Duration) -> bool {
+        self.fetched_at.elapsed() < ttl
+    }
+    fn age_secs(&self) -> f32 {
+        self.fetched_at.elapsed().as_secs_f32()
+    }
+}
+
+struct ScheduleCache {
+    data: Option<ScheduleRightNowResponse>,
+    last_fetch: Option<Instant>,
+}
 
 #[derive(Clone)]
 pub struct SrApiClient {
@@ -46,18 +61,29 @@ impl SrApiClient {
 
         Ok(Self {
             client,
-            schedule_cache: Arc::new(Mutex::new(ScheduleCache { data: None, last_fetch: None })),
+            schedule_cache: Arc::new(Mutex::new(ScheduleCache {
+                data: None,
+                last_fetch: None,
+            })),
             programs_cache: Arc::new(Mutex::new(None)),
             episodes_cache: Arc::new(Mutex::new(HashMap::new())),
         })
     }
 
     pub fn get_channels(&self) -> Result<Vec<Channel>> {
-        let url = format!("{}/channels?liveaudiotemplateid=5&audioquality=hi&format=json", SR_API_BASE);
+        let url = format!(
+            "{}/channels?liveaudiotemplateid=5&audioquality=hi&format=json",
+            SR_API_BASE
+        );
         debug!("Fetching channels from: {}", url);
 
-        let response = self.client.get(&url).send().context("Failed to fetch channels")?;
-        let channels_response: ChannelsResponse = response.json().context("Failed to parse channels JSON")?;
+        let response = self
+            .client
+            .get(&url)
+            .send()
+            .context("Failed to fetch channels")?;
+        let channels_response: ChannelsResponse =
+            response.json().context("Failed to parse channels JSON")?;
 
         info!("Fetched {} channels", channels_response.channels.len());
         Ok(channels_response.channels)
@@ -69,17 +95,28 @@ impl SrApiClient {
             let cache = self.schedule_cache.lock().unwrap();
             if let (Some(data), Some(last_fetch)) = (&cache.data, cache.last_fetch) {
                 if last_fetch.elapsed() < SCHEDULE_CACHE_TTL {
-                    debug!("Using cached schedule (age: {:.1}s)", last_fetch.elapsed().as_secs_f32());
+                    debug!(
+                        "Using cached schedule (age: {:.1}s)",
+                        last_fetch.elapsed().as_secs_f32()
+                    );
                     return Ok(data.clone());
                 }
             }
         }
 
-        let url = format!("{}/scheduledepisodes/rightnow?format=json&pagination=false", SR_API_BASE);
+        let url = format!(
+            "{}/scheduledepisodes/rightnow?format=json&pagination=false",
+            SR_API_BASE
+        );
         info!("Fetching fresh schedule");
 
-        let response = self.client.get(&url).send().context("Failed to fetch schedule")?;
-        let schedule: ScheduleRightNowResponse = response.json().context("Failed to parse schedule JSON")?;
+        let response = self
+            .client
+            .get(&url)
+            .send()
+            .context("Failed to fetch schedule")?;
+        let schedule: ScheduleRightNowResponse =
+            response.json().context("Failed to parse schedule JSON")?;
 
         info!("Fetched schedule for {} channels", schedule.channels.len());
 
@@ -108,10 +145,16 @@ impl SrApiClient {
         let url = format!("{}/programs?format=json&pagination=false", SR_API_BASE);
         info!("Fetching fresh programs");
 
-        let response = self.client.get(&url).send().context("Failed to fetch programs")?;
-        let programs_response: ProgramsResponse = response.json().context("Failed to parse programs JSON")?;
+        let response = self
+            .client
+            .get(&url)
+            .send()
+            .context("Failed to fetch programs")?;
+        let programs_response: ProgramsResponse =
+            response.json().context("Failed to parse programs JSON")?;
 
-        let podcast_programs: Vec<Program> = programs_response.programs
+        let podcast_programs: Vec<Program> = programs_response
+            .programs
             .into_iter()
             .filter(|p| p.has_pod && !p.archived)
             .collect();
@@ -133,7 +176,11 @@ impl SrApiClient {
             let cache = self.episodes_cache.lock().unwrap();
             if let Some(entry) = cache.get(&program_id) {
                 if entry.is_valid(EPISODES_CACHE_TTL) {
-                    debug!("Using cached episodes for program {} (age: {:.1}s)", program_id, entry.age_secs());
+                    debug!(
+                        "Using cached episodes for program {} (age: {:.1}s)",
+                        program_id,
+                        entry.age_secs()
+                    );
                     return Ok(entry.data.clone());
                 }
             }
@@ -145,15 +192,24 @@ impl SrApiClient {
         );
         info!("Fetching episodes for program {}", program_id);
 
-        let response = self.client.get(&url).send().context(format!("Failed to fetch episodes for program {}", program_id))?;
-        let episodes_response: EpisodesResponse = response.json().context("Failed to parse episodes JSON")?;
+        let response = self.client.get(&url).send().context(format!(
+            "Failed to fetch episodes for program {}",
+            program_id
+        ))?;
+        let episodes_response: EpisodesResponse =
+            response.json().context("Failed to parse episodes JSON")?;
 
-        let episodes: Vec<Episode> = episodes_response.episodes
+        let episodes: Vec<Episode> = episodes_response
+            .episodes
             .into_iter()
             .filter(|e| e.listen_podfile.is_some())
             .collect();
 
-        info!("Fetched {} episodes for program {}", episodes.len(), program_id);
+        info!(
+            "Fetched {} episodes for program {}",
+            episodes.len(),
+            program_id
+        );
 
         // Update cache
         {

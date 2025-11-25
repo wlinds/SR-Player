@@ -126,10 +126,16 @@ pub struct Program {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ProgramChannel { pub id: u32, pub name: String }
+pub struct ProgramChannel {
+    pub id: u32,
+    pub name: String,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ProgramCategory { pub id: u32, pub name: String }
+pub struct ProgramCategory {
+    pub id: u32,
+    pub name: String,
+}
 
 // Episodes API
 #[derive(Debug, Clone, Serialize, Deserialize)]
