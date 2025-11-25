@@ -32,6 +32,9 @@ export component NowPlaying inherits Rectangle {
     // Called when user clicks "Browse Podcasts" button for current program
     callback browse-podcasts-clicked(int);  // Parameters: (program_id)
 
+    // Called when user clicks the share button to copy episode URL
+    callback share-clicked(string);  // Parameters: (episode_url)
+
     // ================================================================
     // VISUAL STYLING
     // ================================================================
@@ -58,8 +61,11 @@ export component NowPlaying inherits Rectangle {
                 image-fit: cover;
             }
 
-            // Program text details
+            // Program text details - constrained to image height
             Rectangle {
+                height: 140px;  // Match image height to prevent overflow
+                clip: true;     // Clip any content that exceeds bounds
+
                 // Program title (wraps for long podcast episode names)
                 Text {
                     text: current-program.title;
@@ -96,7 +102,7 @@ export component NowPlaying inherits Rectangle {
                     x: 0px;
                     y: 62px;
                     width: parent.width;
-                    max-height: 40px;
+                    max-height: 78px;  // 140 - 62 = 78px remaining space
                 }
             }
         }
@@ -122,6 +128,38 @@ export component NowPlaying inherits Rectangle {
             font-family: "Segoe UI";
             horizontal-alignment: center;
             vertical-alignment: center;
+        }
+    }
+
+    // ================================================================
+    // SHARE BUTTON (Bottom Right Corner - next to LIVE indicator)
+    // ================================================================
+    if current-program.episode-url != "": Rectangle {
+        // Position to the left of LIVE indicator (or at same spot if no LIVE)
+        x: playback-duration == 0 && is-live && current-program.title != ""
+            ? parent.width - 45px - 16px - self.width - 8px  // Left of LIVE with 8px gap
+            : parent.width - self.width - 16px;              // Same position as LIVE when not live
+        y: 138px;  // Same y-position as LIVE indicator
+        width: 32px;
+        height: 18px;  // Same height as LIVE indicator
+        background: share-touch.has-hover ? #4a4a4a : #3a3a3a;
+        border-radius: 3px;  // Same border-radius as LIVE indicator
+
+        share-touch := TouchArea {
+            mouse-cursor: pointer;
+            clicked => {
+                share-clicked(current-program.episode-url);
+            }
+        }
+
+        // Share icon
+        Image {
+            source: @image-url("../assets/icons/share.svg");
+            width: 12px;
+            height: 12px;
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            colorize: #ffffff;
         }
     }
 }
