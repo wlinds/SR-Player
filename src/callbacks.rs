@@ -108,12 +108,15 @@ pub async fn update_program_info(
     Some(program_title)
 }
 
-/// Helper to find an episode by ID in a Slint model
-fn find_episode_in_model(episodes: &ModelRc<EpisodeItem>, episode_id: i32) -> Option<EpisodeItem> {
+/// Helper to find an episode by ID in a Slint model, returns (episode, index)
+fn find_episode_in_model(
+    episodes: &ModelRc<EpisodeItem>,
+    episode_id: i32,
+) -> Option<(EpisodeItem, usize)> {
     for i in 0..episodes.row_count() {
         if let Some(episode) = episodes.row_data(i) {
             if episode.id == episode_id {
-                return Some(episode);
+                return Some((episode, i));
             }
         }
     }
@@ -416,10 +419,14 @@ fn setup_program_callbacks(ui: &MainWindow, app_state: &AppState, api_client: &S
         ui.on_browse_podcasts_clicked(move |program_id| {
             let ui_clone = ui_weak.clone();
             let api = api_clone.clone();
+            let state_clone = state.clone();
             state.spawn(async move {
                 if let Ok((episodes, name)) =
                     core::podcast::fetch_episodes_for_program(&api, program_id as u32).await
                 {
+                    // Store episodes for auto-play
+                    state_clone.set_current_episodes(episodes.clone());
+
                     let _ = ui_clone.upgrade_in_event_loop(move |ui| {
                         ui.set_episodes(ModelRc::from(Rc::new(VecModel::from(episodes))));
                         ui.set_selected_program_name(name.into());
@@ -441,10 +448,14 @@ fn setup_program_callbacks(ui: &MainWindow, app_state: &AppState, api_client: &S
         ui.on_program_selected(move |program_id| {
             let ui_clone = ui_weak.clone();
             let api = api_clone.clone();
+            let state_clone = state.clone();
             state.spawn(async move {
                 if let Ok((episodes, name)) =
                     core::podcast::fetch_episodes_for_program(&api, program_id as u32).await
                 {
+                    // Store episodes for auto-play
+                    state_clone.set_current_episodes(episodes.clone());
+
                     let _ = ui_clone.upgrade_in_event_loop(move |ui| {
                         ui.set_episodes(ModelRc::from(Rc::new(VecModel::from(episodes))));
                         ui.set_selected_program_name(name.into());
@@ -526,11 +537,15 @@ fn setup_episode_callback(ui: &MainWindow, app_state: &AppState) {
         ui.set_is_loading(true);
         ui.set_current_channel_name("Podcast".into());
 
-        let Some(episode) = find_episode_in_model(&ui.get_episodes(), episode_id) else {
+        let Some((episode, episode_index)) = find_episode_in_model(&ui.get_episodes(), episode_id)
+        else {
             eprintln!("Episode {} not found", episode_id);
             let _ = ui_weak.upgrade_in_event_loop(|ui| ui.set_is_loading(false));
             return;
         };
+
+        // Track current episode index for auto-play next
+        state.set_current_episode_index(Some(episode_index));
 
         ui.set_current_program(ProgramInfo {
             title: episode.title.clone(),
@@ -718,8 +733,8 @@ fn setup_favorite_callbacks(ui: &MainWindow, app_state: &AppState) {
     }
 }
 
-/// Window dragging and share callbacks
-fn setup_misc_callbacks(ui: &MainWindow, _app_state: &AppState) {
+/// Window dragging, share, and auto-play callbacks
+fn setup_misc_callbacks(ui: &MainWindow, app_state: &AppState) {
     // Window dragging
     {
         let ui_weak = ui.as_weak();
@@ -816,6 +831,46 @@ fn setup_misc_callbacks(ui: &MainWindow, _app_state: &AppState) {
                         ui.set_clipboard_status("".into());
                     }
                 });
+            }
+        });
+    }
+
+    // Auto-play next episode when current one finishes
+    {
+        let ui_weak = ui.as_weak();
+        let state = app_state.clone();
+
+        ui.on_episode_finished(move || {
+            // Get current episode index
+            let Some(current_index) = state.get_current_episode_index() else {
+                return;
+            };
+
+            let next_index = current_index + 1;
+
+            // Check if there's a next episode
+            if next_index >= state.get_episode_count() {
+                println!("No more episodes to play");
+                state.set_current_episode_index(None);
+                if let Some(ui) = ui_weak.upgrade() {
+                    ui.set_is_playing(false);
+                }
+                return;
+            }
+
+            // Get the next episode
+            let Some(next_episode) = state.get_episode_at(next_index) else {
+                return;
+            };
+
+            println!(
+                "Auto-playing next episode: {} (index {})",
+                next_episode.title, next_index
+            );
+
+            // Play the next episode
+            if let Some(ui) = ui_weak.upgrade() {
+                ui.invoke_episode_selected(next_episode.id);
             }
         });
     }

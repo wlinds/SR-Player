@@ -61,6 +61,10 @@ export component MainWindow inherits Window {
             if (playback-duration > 0 && playback-position < playback-duration) {
                 playback-position += 1.0;
             }
+            // Episode finished - trigger auto-play next
+            else if (playback-duration > 0 && playback-position >= playback-duration) {
+                episode-finished();
+            }
             // For live radio at live edge: call Rust callback to calculate position based on current time
             else if (playback-duration == 0 && is-live && current-program.start-time != "") {
                 update-live-position();
@@ -161,6 +165,9 @@ export component MainWindow inherits Window {
 
     // Share callback
     callback share-clicked(string);  // (episode_url)
+
+    // Auto-play callback
+    callback episode-finished();  // Called when an episode reaches the end
 
     // ================================================================
     // MAIN LAYOUT

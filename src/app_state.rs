@@ -29,6 +29,8 @@ pub struct AppState {
     pub active_player: Arc<Mutex<ActivePlayer>>,
     pub current_episode_url: Arc<Mutex<Option<String>>>,
     pub current_channel_id: Arc<Mutex<Option<i32>>>,
+    pub current_episode_index: Arc<Mutex<Option<usize>>>,
+    pub current_episodes: Arc<Mutex<Vec<crate::EpisodeItem>>>,
 
     // Program state
     pub all_programs: Arc<Mutex<Vec<Program>>>,
@@ -59,6 +61,8 @@ impl AppState {
             active_player: Arc::new(Mutex::new(ActivePlayer::None)),
             current_episode_url: Arc::new(Mutex::new(None)),
             current_channel_id: Arc::new(Mutex::new(None)),
+            current_episode_index: Arc::new(Mutex::new(None)),
+            current_episodes: Arc::new(Mutex::new(Vec::new())),
             all_programs: Arc::new(Mutex::new(Vec::new())),
             groups_expanded: Arc::new(Mutex::new(HashMap::new())),
             favorites: Arc::new(Mutex::new(favorites)),
@@ -138,6 +142,42 @@ impl AppState {
     /// Get current channel ID
     pub fn get_current_channel_id(&self) -> Option<i32> {
         self.current_channel_id.lock().ok().and_then(|id| *id)
+    }
+
+    /// Set current episode index (for auto-play next)
+    pub fn set_current_episode_index(&self, index: Option<usize>) {
+        if let Ok(mut current) = self.current_episode_index.lock() {
+            *current = index;
+        }
+    }
+
+    /// Get current episode index
+    pub fn get_current_episode_index(&self) -> Option<usize> {
+        self.current_episode_index.lock().ok().and_then(|idx| *idx)
+    }
+
+    /// Set the current episodes list (for auto-play)
+    pub fn set_current_episodes(&self, episodes: Vec<crate::EpisodeItem>) {
+        if let Ok(mut current) = self.current_episodes.lock() {
+            *current = episodes;
+        }
+    }
+
+    /// Get episode at index (for auto-play next)
+    pub fn get_episode_at(&self, index: usize) -> Option<crate::EpisodeItem> {
+        self.current_episodes
+            .lock()
+            .ok()
+            .and_then(|eps| eps.get(index).cloned())
+    }
+
+    /// Get total episode count
+    pub fn get_episode_count(&self) -> usize {
+        self.current_episodes
+            .lock()
+            .ok()
+            .map(|eps| eps.len())
+            .unwrap_or(0)
     }
 
     /// Spawn an async task on the runtime
