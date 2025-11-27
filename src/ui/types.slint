@@ -31,6 +31,7 @@ export struct ProgramInfo {
     show-image: image,     // Program thumbnail/image
     program-id: int,       // Unique program ID for API calls
     has-podcasts: bool,    // Whether this program has podcast episodes
+    episode-url: string,   // URL to share this episode (https://sverigesradio.se/avsnitt/{id})
 }
 
 // Represents a program with podcast episodes
@@ -63,4 +64,5 @@ export struct EpisodeItem {
     publish-date: string,      // Formatted publish date (e.g., "11 Aug 2020")
     url: string,               // MP3 file URL for streaming
     file-size: string,         // Formatted file size (e.g., "9.2 MB")
+    share-url: string,         // Web URL for sharing (https://sverigesradio.se/avsnitt/{id})
 }

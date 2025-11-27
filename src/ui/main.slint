@@ -38,6 +38,8 @@ export component MainWindow inherits Window {
     // WINDOW PROPERTIES
     // ================================================================
     title: "SR Player - Sveriges Radio";
+    // Window icon shown in taskbar and title bar (PNG for cross-platform support)
+    icon: @image-url("../assets/icons/icon.png");
     // no-frame: true;
     min-width: 300px;
     min-height: 300px;
@@ -58,6 +60,10 @@ export component MainWindow inherits Window {
             // For episodes: increment position directly
             if (playback-duration > 0 && playback-position < playback-duration) {
                 playback-position += 1.0;
+            }
+            // Episode finished - trigger auto-play next
+            else if (playback-duration > 0 && playback-position >= playback-duration) {
+                episode-finished();
             }
             // For live radio at live edge: call Rust callback to calculate position based on current time
             else if (playback-duration == 0 && is-live && current-program.start-time != "") {
@@ -85,6 +91,7 @@ export component MainWindow inherits Window {
     in-out property <float> playback-duration: 0.0;     // Total duration in seconds (episodes)
     in-out property <float> program-duration: 0.0;      // Total duration in seconds (live radio programs)
     in-out property <string> download-status: "";       // Download status message
+    in-out property <string> clipboard-status: "";      // Clipboard copy status message
     in-out property <float> buffer-depth: 0.0;          // DVR buffer depth in seconds
     in-out property <bool> is-live: true;               // True if at live edge, false if time-shifted
     in-out property <ProgramInfo> current-program: {
@@ -156,6 +163,12 @@ export component MainWindow inherits Window {
     callback toggle-favorite-program(int);  // (program_id)
     callback favorites-tab-clicked();
 
+    // Share callback
+    callback share-clicked(string);  // (episode_url)
+
+    // Auto-play callback
+    callback episode-finished();  // Called when an episode reaches the end
+
     // ================================================================
     // MAIN LAYOUT
     // ================================================================
@@ -206,6 +219,10 @@ export component MainWindow inherits Window {
 
             browse-podcasts-clicked(program-id) => {
                 root.browse-podcasts-clicked(program-id);
+            }
+
+            share-clicked(episode-url) => {
+                root.share-clicked(episode-url);
             }
         }
 
@@ -369,6 +386,21 @@ export component MainWindow inherits Window {
 
                     Text {
                         text: download-status;
+                        color: #4CAF50;
+                        font-size: 10px;
+                    }
+                }
+
+                // Clipboard status (copied to clipboard)
+                if clipboard-status != "": HorizontalBox {
+                    padding-left: 8px;
+                    padding-right: 8px;
+                    padding-top: 0px;
+                    padding-bottom: 2px;
+                    alignment: center;
+
+                    Text {
+                        text: clipboard-status;
                         color: #4CAF50;
                         font-size: 10px;
                     }
@@ -697,16 +729,32 @@ export component MainWindow inherits Window {
                 }
             }
 
-            // Show programs if any
-            if favorite-programs.length > 0: TabContent {
-                is-programs-tab: true;
+            // Show programs or episodes (depending on show-episodes-view state)
+            if favorite-programs.length > 0 || show-episodes-view: TabContent {
+                // Switch between programs list and episodes view
+                show-back-button: show-episodes-view;
+                selected-program-name: root.selected-program-name;
+
+                // Show either programs or episodes
+                is-programs-tab: !show-episodes-view;
+                is-episodes-tab: show-episodes-view;
+
                 programs: root.favorite-programs;
+                episodes: root.episodes;
                 is-loaded: true;
-                empty-text: "";
-                show-favorite-buttons: true;
+                empty-text: show-episodes-view ? "No episodes found" : "";
+                show-favorite-buttons: !show-episodes-view;
 
                 program-selected(id) => {
                     root.program-selected(id);
+                }
+
+                episode-selected(id) => {
+                    root.episode-selected(id);
+                }
+
+                back-clicked => {
+                    root.back-to-programs-clicked();
                 }
 
                 favorite-program-clicked(id) => {

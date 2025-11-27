@@ -175,15 +175,30 @@ jobs:
 
           **Note:** Windows may show a security warning for unsigned software. Click "More info" → "Run anyway".
 
-          ### What's New in v0.5.4
+          ### What's New in v0.6.0
 
           **New Features:**
+          - Auto-play next episode when current one finishes
+          - Add share button to copy episode URL to clipboard
+          - Show "Copied to clipboard" status message
+
+          **Fixes:**
+          - Fix gapless streaming logic and player state management
+          - Fix volume bug when seeking first time in podcast playback
+          - Fix window icon display in taskbar and title bar (PNG for cross-platform)
+          - Fix NowPlaying text overflow when window is resized
+
+          **Improvements:**
+          - Major refactor: migrate callbacks to callbacks.rs, bundle shared state in app_state.rs
+          - Add improved API caching for schedule, programs, and episodes
+          - Add seek_handler module for cleaner seek logic
+          - Clean up comments throughout codebase
+
+          **Previous Features:**
           - Favorites tab for quick access to your favorite channels and podcasts
           - Favorite channels and podcasts with star button (persists across app restarts)
           - Podcast search function to quickly find programs
           - Favorites stored in ~/.config/sr-player/favorites.json
-
-          **Previous Features:**
           - Multi-channel support with instant channel switching
           - DVR buffer for rewinding live radio streams
           - Podcast/episode playback with download caching

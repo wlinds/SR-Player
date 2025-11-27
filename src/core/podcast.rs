@@ -42,6 +42,13 @@ pub fn episode_to_item(episode: &Episode) -> Option<EpisodeItem> {
         // Format publish date
         let publish_date = parse_sr_date_to_display(&episode.publish_date_utc);
 
+        // Use episode.url as share URL (web page) or construct from ID
+        let share_url = if episode.url.is_empty() {
+            format!("https://sverigesradio.se/avsnitt/{}", id)
+        } else {
+            episode.url.clone()
+        };
+
         EpisodeItem {
             id,
             title: episode.title.clone().into(),
@@ -50,6 +57,7 @@ pub fn episode_to_item(episode: &Episode) -> Option<EpisodeItem> {
             publish_date: publish_date.into(),
             url: podfile.url.clone().into(),
             file_size: file_size_str.into(),
+            share_url: share_url.into(),
         }
     })
 }

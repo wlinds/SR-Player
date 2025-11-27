@@ -1,6 +1,6 @@
 // Utility functions for image processing, date parsing, and audio conversion
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Timelike, Utc};
 use chrono_tz::Europe::Stockholm;
 use slint::Image;
 use symphonia::core::audio::{AudioBufferRef, Signal};
@@ -173,4 +173,70 @@ pub fn audio_buffer_to_f32(decoded: &AudioBufferRef) -> Vec<f32> {
             interleave_audio_buffer(buf, |sample| sample.inner() as f32 / 8388608.0)
         }
     }
+}
+
+// ============================================================================
+// TIME PARSING UTILITIES
+// ============================================================================
+
+/// Parse a time string in "HH:MM" format to hours and minutes
+///
+/// # Arguments
+/// * `time_str` - Time string like "09:30" or "14:00"
+///
+/// # Returns
+/// Some((hours, minutes)) if valid, None if parse fails
+pub fn parse_hm_time(time_str: &str) -> Option<(i32, i32)> {
+    let parts: Vec<&str> = time_str.split(':').collect();
+    if parts.len() == 2 {
+        let hours = parts[0].parse::<i32>().ok()?;
+        let minutes = parts[1].parse::<i32>().ok()?;
+        Some((hours, minutes))
+    } else {
+        None
+    }
+}
+
+/// Calculate program playback position and duration from time strings
+///
+/// Handles overnight programs (e.g., 23:00 - 02:00) by adding 24 hours.
+///
+/// # Arguments
+/// * `start_time` - Program start time "HH:MM"
+/// * `end_time` - Program end time "HH:MM"
+///
+/// # Returns
+/// (position_seconds, duration_seconds) based on current Stockholm time
+pub fn calculate_program_position(start_time: &str, end_time: &str) -> Option<(f32, f32)> {
+    let (start_h, start_m) = parse_hm_time(start_time)?;
+    let (end_h, end_m) = parse_hm_time(end_time)?;
+
+    // Get current Stockholm time
+    let now = Utc::now().with_timezone(&Stockholm);
+    let current_h = now.hour() as i32;
+    let current_m = now.minute() as i32;
+    let current_s = now.second() as i32;
+
+    // Calculate minutes from midnight
+    let start_minutes = start_h * 60 + start_m;
+    let mut end_minutes = end_h * 60 + end_m;
+
+    // Handle overnight programs (e.g., 23:00 - 02:00)
+    if end_minutes < start_minutes {
+        end_minutes += 24 * 60;
+    }
+
+    let current_minutes = current_h * 60 + current_m;
+
+    // Calculate position
+    let mut elapsed_minutes = current_minutes - start_minutes;
+    if elapsed_minutes < 0 {
+        elapsed_minutes += 24 * 60; // Handle wrap-around
+    }
+
+    let duration_minutes = end_minutes - start_minutes;
+    let position = (elapsed_minutes * 60 + current_s) as f32;
+    let duration = (duration_minutes * 60) as f32;
+
+    Some((position, duration))
 }
