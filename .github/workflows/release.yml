@@ -153,32 +153,49 @@ jobs:
         fi
 
         echo "Submission ID: $SUBMISSION_ID"
-        echo "Waiting for notarization (max 10 minutes)..."
+        echo "Waiting for notarization (polling for up to 15 minutes)..."
 
-        # Wait for notarization with timeout
-        if timeout 600 xcrun notarytool wait "$SUBMISSION_ID" \
-          --apple-id "$APPLE_ID" \
-          --password "$APPLE_APP_PASSWORD" \
-          --team-id "$APPLE_TEAM_ID"; then
+        # Poll for notarization status with timeout
+        MAX_WAIT_SECONDS=900  # 15 minutes
+        WAIT_INTERVAL=15      # Check every 15 seconds
+        ELAPSED=0
+        STATUS="In Progress"
 
-          echo "Notarization completed successfully"
+        while [ $ELAPSED -lt $MAX_WAIT_SECONDS ] && [ "$STATUS" = "In Progress" ]; do
+          sleep $WAIT_INTERVAL
+          ELAPSED=$((ELAPSED + WAIT_INTERVAL))
 
-          # Check status
-          xcrun notarytool info "$SUBMISSION_ID" \
+          echo "Checking status (${ELAPSED}s elapsed)..."
+
+          INFO_OUTPUT=$(xcrun notarytool info "$SUBMISSION_ID" \
             --apple-id "$APPLE_ID" \
             --password "$APPLE_APP_PASSWORD" \
-            --team-id "$APPLE_TEAM_ID"
+            --team-id "$APPLE_TEAM_ID" 2>&1 || true)
 
-          # Staple the notarization ticket to the app
-          echo "Stapling notarization ticket..."
-          xcrun stapler staple "$APP_PATH"
-        else
-          echo "Notarization timed out or failed. Getting logs..."
-          xcrun notarytool log "$SUBMISSION_ID" \
-            --apple-id "$APPLE_ID" \
-            --password "$APPLE_APP_PASSWORD" \
-            --team-id "$APPLE_TEAM_ID" || echo "Could not retrieve logs"
+          echo "$INFO_OUTPUT"
 
+          STATUS=$(echo "$INFO_OUTPUT" | grep "status:" | awk '{print $2}')
+
+          if [ "$STATUS" = "Accepted" ]; then
+            echo "Notarization completed successfully"
+
+            # Staple the notarization ticket to the app
+            echo "Stapling notarization ticket..."
+            xcrun stapler staple "$APP_PATH"
+            break
+          elif [ "$STATUS" = "Invalid" ] || [ "$STATUS" = "Rejected" ]; then
+            echo "Notarization failed with status: $STATUS"
+            echo "Getting detailed logs..."
+            xcrun notarytool log "$SUBMISSION_ID" \
+              --apple-id "$APPLE_ID" \
+              --password "$APPLE_APP_PASSWORD" \
+              --team-id "$APPLE_TEAM_ID" || echo "Could not retrieve logs"
+            exit 1
+          fi
+        done
+
+        if [ $ELAPSED -ge $MAX_WAIT_SECONDS ] && [ "$STATUS" = "In Progress" ]; then
+          echo "Notarization timed out after ${MAX_WAIT_SECONDS}s"
           echo "WARNING: App is code-signed but not notarized. Users will need to use 'Open Anyway' in System Settings."
           exit 1
         fi
