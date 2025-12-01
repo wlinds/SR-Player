@@ -165,14 +165,26 @@ jobs:
           sleep $WAIT_INTERVAL
           ELAPSED=$((ELAPSED + WAIT_INTERVAL))
 
-          echo "Checking status (${ELAPSED}s elapsed)..."
+          # Only print status every minute to reduce log spam
+          if [ $((ELAPSED % 60)) -eq 0 ] || [ $ELAPSED -eq 15 ]; then
+            echo "Checking status (${ELAPSED}s / ${MAX_WAIT_SECONDS}s elapsed)..."
+          fi
 
           INFO_OUTPUT=$(xcrun notarytool info "$SUBMISSION_ID" \
             --apple-id "$APPLE_ID" \
             --password "$APPLE_APP_PASSWORD" \
             --team-id "$APPLE_TEAM_ID" 2>&1 || true)
 
-          echo "$INFO_OUTPUT"
+          # Check for network errors
+          if echo "$INFO_OUTPUT" | grep -q "NSURLErrorDomain\|connection.*offline\|HTTPError"; then
+            echo "Network error detected, retrying..."
+            continue
+          fi
+
+          # Only print output every minute to reduce log spam
+          if [ $((ELAPSED % 60)) -eq 0 ] || [ $ELAPSED -eq 15 ]; then
+            echo "$INFO_OUTPUT"
+          fi
 
           STATUS=$(echo "$INFO_OUTPUT" | grep "status:" | awk '{print $2}')
 
@@ -291,7 +303,9 @@ jobs:
           1. Download `SR-Player-${{ github.ref_name }}-macos.zip`
           2. Unzip the file
           3. Drag `SR Player.app` to your Applications folder
-          4. Right-click and select "Open" (first time only, due to macOS Gatekeeper)
+          4. **First launch:** Right-click the app and select "Open", then click "Open" in the dialog
+             - Or: Go to System Settings > Privacy & Security and click "Open Anyway"
+             - This is only needed once due to the app being code-signed but not notarized
 
           #### Linux
           1. Download `sr-player-${{ github.ref_name }}-linux.tar.gz`
