@@ -106,6 +106,8 @@ jobs:
 
     - name: Notarize macOS app
       if: matrix.os == 'macos-latest'
+      continue-on-error: true
+      timeout-minutes: 30
       env:
         APPLE_ID: ${{ secrets.APPLE_ID }}
         APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
@@ -116,15 +118,70 @@ jobs:
         # Create ZIP for notarization
         ditto -c -k --keepParent "$APP_PATH" "SR-Player-notarize.zip"
 
-        # Submit for notarization and wait
-        xcrun notarytool submit "SR-Player-notarize.zip" \
+        echo "Submitting to Apple Notary Service..."
+
+        # Submit for notarization with retry logic
+        MAX_RETRIES=3
+        RETRY_COUNT=0
+        SUBMISSION_ID=""
+
+        while [ $RETRY_COUNT -lt $MAX_RETRIES ] && [ -z "$SUBMISSION_ID" ]; do
+          echo "Attempt $((RETRY_COUNT + 1))/$MAX_RETRIES to submit..."
+
+          SUBMIT_OUTPUT=$(xcrun notarytool submit "SR-Player-notarize.zip" \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_APP_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" \
+            2>&1 || true)
+
+          echo "$SUBMIT_OUTPUT"
+
+          SUBMISSION_ID=$(echo "$SUBMIT_OUTPUT" | grep "id:" | head -n1 | awk '{print $2}')
+
+          if [ -z "$SUBMISSION_ID" ]; then
+            RETRY_COUNT=$((RETRY_COUNT + 1))
+            if [ $RETRY_COUNT -lt $MAX_RETRIES ]; then
+              echo "Submission failed, waiting 30 seconds before retry..."
+              sleep 30
+            fi
+          fi
+        done
+
+        if [ -z "$SUBMISSION_ID" ]; then
+          echo "Failed to get submission ID after $MAX_RETRIES attempts"
+          exit 1
+        fi
+
+        echo "Submission ID: $SUBMISSION_ID"
+        echo "Waiting for notarization (max 10 minutes)..."
+
+        # Wait for notarization with timeout
+        if timeout 600 xcrun notarytool wait "$SUBMISSION_ID" \
           --apple-id "$APPLE_ID" \
           --password "$APPLE_APP_PASSWORD" \
-          --team-id "$APPLE_TEAM_ID" \
-          --wait
+          --team-id "$APPLE_TEAM_ID"; then
 
-        # Staple the notarization ticket to the app
-        xcrun stapler staple "$APP_PATH"
+          echo "Notarization completed successfully"
+
+          # Check status
+          xcrun notarytool info "$SUBMISSION_ID" \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_APP_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID"
+
+          # Staple the notarization ticket to the app
+          echo "Stapling notarization ticket..."
+          xcrun stapler staple "$APP_PATH"
+        else
+          echo "Notarization timed out or failed. Getting logs..."
+          xcrun notarytool log "$SUBMISSION_ID" \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_APP_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" || echo "Could not retrieve logs"
+
+          echo "WARNING: App is code-signed but not notarized. Users will need to use 'Open Anyway' in System Settings."
+          exit 1
+        fi
 
         # Clean up
         rm "SR-Player-notarize.zip"
