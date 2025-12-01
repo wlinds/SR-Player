@@ -5,6 +5,7 @@ on:
     branches: [ main ]
   pull_request:
     branches: [ main ]
+  tags: [ 'v*' ]
 
 env:
   CARGO_TERM_COLOR: always
@@ -56,3 +57,223 @@ jobs:
 
     - name: Build release
       run: cargo build --release --verbose
+
+    - name: Upload macOS release artifact
+      if: matrix.os == 'macos-latest' && startsWith(github.ref, 'refs/tags/')
+      uses: actions/upload-artifact@v4
+      with:
+        name: sr-player-macos-binary
+        path: target/release/sr-player
+        retention-days: 1
+
+  release-macos:
+    name: Build, Bundle, Sign, and Release macOS
+    runs-on: macos-latest
+    if: startsWith(github.ref, 'refs/tags/')  # Only run on tags
+    needs: build-and-test
+    permissions:
+      contents: write
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0  # For release notes
+
+    - name: Download macOS binary artifact
+      uses: actions/download-artifact@v4
+      with:
+        name: sr-player-macos-binary
+        path: target/release/
+
+    - name: Verify binary exists
+      run: |
+        if [ ! -f "target/release/sr-player" ]; then
+          echo "Error: sr-player binary not found"
+          ls -la target/release/
+          exit 1
+        fi
+        echo "Binary found: $(du -h target/release/sr-player)"
+
+    - name: Create app bundle structure
+      run: |
+        APP_NAME="SR Player.app"
+        BINARY_NAME="sr-player"
+        DISPLAY_NAME="SR Player"
+        BUNDLE_ID="com.akillesvector.srplayer"
+        VERSION="${{ github.ref_name }}"  # Use tag as version
+        
+        echo "Creating $APP_NAME bundle..."
+        rm -rf "$APP_NAME"
+        mkdir -p "$APP_NAME/Contents/{MacOS,Resources}"
+        
+        # Copy binary
+        cp "target/release/$BINARY_NAME" "$APP_NAME/Contents/MacOS/$BINARY_NAME"
+        chmod +x "$APP_NAME/Contents/MacOS/$BINARY_NAME"
+        echo "Copied binary to MacOS folder"
+        
+        # Create PkgInfo (required)
+        echo "APPL????" > "$APP_NAME/Contents/PkgInfo"
+        
+        # Copy icon if exists
+        if [ -f "src/assets/icons/icon.png" ]; then
+          cp "src/assets/icons/icon.png" "$APP_NAME/Contents/Resources/icon.png"
+          echo "Added icon.png to Resources"
+        else
+          echo "No icon.png found - using default"
+        fi
+        
+        # Create Info.plist
+        cat > "$APP_NAME/Contents/Info.plist" << EOF
+        <?xml version="1.0" encoding="UTF-8"?>
+        <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+        <plist version="1.0">
+        <dict>
+          <key>CFBundleExecutable</key>
+          <string>$BINARY_NAME</string>
+          <key>CFBundleIdentifier</key>
+          <string>$BUNDLE_ID</string>
+          <key>CFBundleInfoDictionaryVersion</key>
+          <string>1.0.0</string>
+          <key>CFBundleName</key>
+          <string>$DISPLAY_NAME</string>
+          <key>CFBundlePackageType</key>
+          <string>APPL</string>
+          <key>CFBundleShortVersionString</key>
+          <string>$VERSION</string>
+          <key>CFBundleVersion</key>
+          <string>$VERSION</string>
+          <key>LSMinimumSystemVersion</key>
+          <string>10.15</string>
+          <key>LSUIElement</key>
+          <false/>
+          <key>NSPrincipalClass</key>
+          <string>NSApplication</string>
+          <key>CFBundleDevelopmentRegion</key>
+          <string>en</string>
+        </dict>
+        </plist>
+        EOF
+        
+        # Add icon reference
+        if [ -f "$APP_NAME/Contents/Resources/icon.png" ]; then
+          /usr/libexec/PlistBuddy -c "Add :CFBundleIconFile string icon" "$APP_NAME/Contents/Info.plist"
+        fi
+        
+        # Create empty resource
+        touch "$APP_NAME/Contents/Resources/empty.lproj"
+        
+        echo "Bundle created successfully"
+        echo "Contents structure:"
+        ls -la "$APP_NAME/Contents/"
+
+    - name: Import Code Signing Certificate
+      env:
+        APPLE_CERTIFICATE_BASE64: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
+        APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+      run: |
+        APP_NAME="SR Player.app"
+        KEYCHAIN_PATH=$RUNNER_TEMP/signing.keychain-db
+        KEYCHAIN_PASSWORD=$(openssl rand -base64 32)
+        
+        # Create temporary keychain
+        security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+        security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+        security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+        
+        # Decode and import certificate
+        echo "$APPLE_CERTIFICATE_BASE64" | base64 --decode > cert.p12
+        security import cert.p12 -P "$APPLE_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+        security list-keychain -d user -s "$KEYCHAIN_PATH"
+        
+        # Allow codesign access
+        security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+        
+        # Verify identity
+        IDENTITY="Developer ID Application: William Akilles Lindstedt (87L3N582L6)"
+        if security find-identity -v -p codesigning "$KEYCHAIN_PATH" | grep -q "$IDENTITY"; then
+          echo "Certificate imported successfully"
+        else
+          echo "Warning: Expected identity not found - available:"
+          security find-identity -v -p codesigning "$KEYCHAIN_PATH"
+        fi
+
+    - name: Sign the app bundle
+      run: |
+        APP_NAME="SR Player.app"
+        IDENTITY="Developer ID Application: William Akilles Lindstedt (87L3N582L6)"
+        
+        echo "Signing $APP_NAME..."
+        codesign --force --deep --options runtime --sign "$IDENTITY" --timestamp "$APP_NAME"
+        
+        # Verify signature
+        codesign --verify --deep --strict "$APP_NAME"
+        if [ $? -eq 0 ]; then
+          echo "Signature verification passed"
+        else
+          echo "Signature verification failed"
+          exit 1
+        fi
+        
+        # Check Hardened Runtime
+        if codesign -dv --verbose=4 "$APP_NAME" 2>&1 | grep -q "flags=.*runtime"; then
+          echo "Hardened Runtime enabled"
+        else
+          echo "Warning: Hardened Runtime not detected"
+        fi
+
+    - name: Notarize the app bundle
+      env:
+        APPLE_ID: ${{ secrets.APPLE_ID }}
+        APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+        APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      run: |
+        APP_NAME="SR Player.app"
+        
+        # Create ZIP for notarization, required for app bundles
+        echo "Creating notarization ZIP..."
+        ditto -c -k --keepParent "$APP_NAME" "SR-Player.zip"
+        
+        # Submit for notarization
+        echo "Submitting to Apple Notary Service..."
+        xcrun notarytool submit "SR-Player.zip" \
+          --apple-id "$APPLE_ID" \
+          --password "$APPLE_APP_PASSWORD" \
+          --team-id "$APPLE_TEAM_ID" \
+          --wait
+        
+        if [ $? -eq 0 ]; then
+          echo "Notarization successful"
+        else
+          echo "Notarization failed - check credentials"
+          exit 1
+        fi
+        
+        # Staple the ticket
+        echo "Stapling notarization ticket..."
+        xcrun stapler staple "$APP_NAME"
+        
+        # Cleanup
+        rm "SR-Player.zip"
+        
+        # Final verification
+        spctl -a -t exec -vv "$APP_NAME"
+
+    - name: Create GitHub Release
+      uses: softprops/action-gh-release@v2
+      if: startsWith(github.ref, 'refs/tags/')
+      with:
+        files: SR Player.app
+        generate_release_notes: true
+        draft: false
+        prerelease: false
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Upload release artifact for debugging
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: sr-player-macos-release-${{ github.sha }}
+        path: SR Player.app
+        retention-days: 7
