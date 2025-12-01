@@ -64,6 +64,67 @@ jobs:
       if: matrix.os == 'macos-latest'
       run: cargo bundle --release
 
+    - name: Import Code Signing Certificate (macOS)
+      if: matrix.os == 'macos-latest'
+      env:
+        APPLE_CERTIFICATE_BASE64: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
+        APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+      run: |
+        # Create temporary keychain
+        KEYCHAIN_PATH=$RUNNER_TEMP/signing.keychain-db
+        KEYCHAIN_PASSWORD=$(openssl rand -base64 32)
+
+        security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+        security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+        security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+        # Import certificate
+        echo "$APPLE_CERTIFICATE_BASE64" | base64 --decode > $RUNNER_TEMP/certificate.p12
+        security import $RUNNER_TEMP/certificate.p12 -P "$APPLE_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+        security list-keychain -d user -s "$KEYCHAIN_PATH"
+
+        # Allow codesign to access the key
+        security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+    - name: Sign macOS app
+      if: matrix.os == 'macos-latest'
+      env:
+        APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      run: |
+        APP_PATH="target/release/bundle/osx/SR Player.app"
+
+        # Sign the app with hardened runtime (required for notarization)
+        codesign --force --options runtime --sign "Developer ID Application: ($APPLE_TEAM_ID)" \
+          --deep --timestamp "$APP_PATH"
+
+        # Verify signature
+        codesign --verify --deep --strict "$APP_PATH"
+
+    - name: Notarize macOS app
+      if: matrix.os == 'macos-latest'
+      env:
+        APPLE_ID: ${{ secrets.APPLE_ID }}
+        APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+        APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      run: |
+        APP_PATH="target/release/bundle/osx/SR Player.app"
+
+        # Create ZIP for notarization
+        ditto -c -k --keepParent "$APP_PATH" "SR-Player-notarize.zip"
+
+        # Submit for notarization and wait
+        xcrun notarytool submit "SR-Player-notarize.zip" \
+          --apple-id "$APPLE_ID" \
+          --password "$APPLE_APP_PASSWORD" \
+          --team-id "$APPLE_TEAM_ID" \
+          --wait
+
+        # Staple the notarization ticket to the app
+        xcrun stapler staple "$APP_PATH"
+
+        # Clean up
+        rm "SR-Player-notarize.zip"
+
     - name: Build Linux binary
       if: matrix.os == 'ubuntu-latest'
       run: cargo build --release
