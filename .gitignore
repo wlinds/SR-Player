@@ -22,3 +22,5 @@ target
 
 # macOS
 .DS_Store
+
+.env
