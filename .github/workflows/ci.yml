@@ -24,7 +24,6 @@ jobs:
             deps: ""
           - os: macos-latest
             deps: ""
-
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
@@ -58,7 +57,8 @@ jobs:
     - name: Build release
       run: cargo build --release --verbose
 
-    - name: Upload macOS release artifact
+    # Upload macOS binary for release job
+    - name: Upload macOS release binary
       if: matrix.os == 'macos-latest' && startsWith(github.ref, 'refs/tags/')
       uses: actions/upload-artifact@v4
       with:
@@ -72,13 +72,13 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/')  # Only run on tags
     needs: build-and-test
     permissions:
-      contents: write
+      contents: write  # For creating releases
 
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
       with:
-        fetch-depth: 0  # For release notes
+        fetch-depth: 0
 
     - name: Download macOS binary artifact
       uses: actions/download-artifact@v4
@@ -93,7 +93,33 @@ jobs:
           ls -la target/release/
           exit 1
         fi
-        echo "Binary found: $(du -h target/release/sr-player)"
+        file target/release/sr-player
+        echo "Binary verified: $(du -h target/release/sr-player)"
+
+    - name: Import Developer ID Certificate
+      uses: apple-actions/import-codesign-certs@v2
+      env:
+        CERTIFICATE_BASE64: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
+        CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+
+    - name: Verify Certificate Import
+      run: |
+        echo "Available code signing identities:"
+        security find-identity -v -p codesigning
+        echo ""
+        echo "Developer ID identities:"
+        security find-identity -v -p codesigning | grep "Developer ID"
+        
+        # Check for our specific identity
+        IDENTITY="Developer ID Application: William Akilles Lindstedt (87L3N582L6)"
+        if security find-identity -v -p codesigning | grep -q "$IDENTITY"; then
+          echo "✓ Found expected Developer ID identity"
+        else
+          echo "✗ Expected identity not found: $IDENTITY"
+          echo "Available Developer ID identities:"
+          security find-identity -v -p codesigning | grep "Developer ID" || echo "None found"
+          exit 1
+        fi
 
     - name: Create app bundle structure
       run: |
@@ -101,26 +127,28 @@ jobs:
         BINARY_NAME="sr-player"
         DISPLAY_NAME="SR Player"
         BUNDLE_ID="com.akillesvector.srplayer"
-        VERSION="${{ github.ref_name }}"  # Use tag as version
+        VERSION="${{ github.ref_name }}"
         
-        echo "Creating $APP_NAME bundle..."
+        echo "Creating $APP_NAME bundle for version $VERSION..."
         rm -rf "$APP_NAME"
         mkdir -p "$APP_NAME/Contents/{MacOS,Resources}"
         
         # Copy binary
         cp "target/release/$BINARY_NAME" "$APP_NAME/Contents/MacOS/$BINARY_NAME"
         chmod +x "$APP_NAME/Contents/MacOS/$BINARY_NAME"
-        echo "Copied binary to MacOS folder"
+        echo "✓ Binary copied: $(du -h "$APP_NAME/Contents/MacOS/$BINARY_NAME")"
         
-        # Create PkgInfo (required)
+        # Create PkgInfo (required for valid app bundle)
         echo "APPL????" > "$APP_NAME/Contents/PkgInfo"
+        echo "✓ PkgInfo created"
         
         # Copy icon if exists
         if [ -f "src/assets/icons/icon.png" ]; then
           cp "src/assets/icons/icon.png" "$APP_NAME/Contents/Resources/icon.png"
-          echo "Added icon.png to Resources"
+          ICON_SIZE=$(du -h "$APP_NAME/Contents/Resources/icon.png" | cut -f1)
+          echo "✓ Icon copied: $ICON_SIZE"
         else
-          echo "No icon.png found - using default"
+          echo "⚠ No icon.png found at src/assets/icons/icon.png - using default icon"
         fi
         
         # Create Info.plist
@@ -129,6 +157,8 @@ jobs:
         <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
         <plist version="1.0">
         <dict>
+          <key>CFBundleDevelopmentRegion</key>
+          <string>en</string>
           <key>CFBundleExecutable</key>
           <string>$BINARY_NAME</string>
           <key>CFBundleIdentifier</key>
@@ -149,53 +179,31 @@ jobs:
           <false/>
           <key>NSPrincipalClass</key>
           <string>NSApplication</string>
-          <key>CFBundleDevelopmentRegion</key>
-          <string>en</string>
         </dict>
         </plist>
         EOF
         
-        # Add icon reference
+        # Add icon reference if icon exists
         if [ -f "$APP_NAME/Contents/Resources/icon.png" ]; then
           /usr/libexec/PlistBuddy -c "Add :CFBundleIconFile string icon" "$APP_NAME/Contents/Info.plist"
+          echo "✓ Added icon reference to Info.plist"
         fi
         
         # Create empty resource
         touch "$APP_NAME/Contents/Resources/empty.lproj"
         
-        echo "Bundle created successfully"
-        echo "Contents structure:"
-        ls -la "$APP_NAME/Contents/"
-
-    - name: Import Code Signing Certificate
-      env:
-        APPLE_CERTIFICATE_BASE64: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
-        APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-      run: |
-        APP_NAME="SR Player.app"
-        KEYCHAIN_PATH=$RUNNER_TEMP/signing.keychain-db
-        KEYCHAIN_PASSWORD=$(openssl rand -base64 32)
-        
-        # Create temporary keychain
-        security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-        security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
-        security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-        
-        # Decode and import certificate
-        echo "$APPLE_CERTIFICATE_BASE64" | base64 --decode > cert.p12
-        security import cert.p12 -P "$APPLE_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
-        security list-keychain -d user -s "$KEYCHAIN_PATH"
-        
-        # Allow codesign access
-        security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-        
-        # Verify identity
-        IDENTITY="Developer ID Application: William Akilles Lindstedt (87L3N582L6)"
-        if security find-identity -v -p codesigning "$KEYCHAIN_PATH" | grep -q "$IDENTITY"; then
-          echo "Certificate imported successfully"
+        # Verify bundle structure
+        if [ -f "$APP_NAME/Contents/PkgInfo" ] && [ -f "$APP_NAME/Contents/Info.plist" ] && [ -f "$APP_NAME/Contents/MacOS/$BINARY_NAME" ]; then
+          echo "✓ Bundle structure verified"
+          echo "Contents files:"
+          ls -la "$APP_NAME/Contents/"
+          if [ -f "$APP_NAME/Contents/Resources/icon.png" ]; then
+            echo "Icon: $(file "$APP_NAME/Contents/Resources/icon.png")"
+          fi
         else
-          echo "Warning: Expected identity not found - available:"
-          security find-identity -v -p codesigning "$KEYCHAIN_PATH"
+          echo "✗ Bundle verification failed"
+          ls -la "$APP_NAME/Contents/"
+          exit 1
         fi
 
     - name: Sign the app bundle
@@ -203,23 +211,44 @@ jobs:
         APP_NAME="SR Player.app"
         IDENTITY="Developer ID Application: William Akilles Lindstedt (87L3N582L6)"
         
-        echo "Signing $APP_NAME..."
+        echo "Signing $APP_NAME with identity: $IDENTITY"
+        echo "Available identities before signing:"
+        security find-identity -v -p codesigning | grep "$IDENTITY" || echo "Identity not found in search"
+        
+        # Sign with explicit identity
         codesign --force --deep --options runtime --sign "$IDENTITY" --timestamp "$APP_NAME"
         
-        # Verify signature
-        codesign --verify --deep --strict "$APP_NAME"
         if [ $? -eq 0 ]; then
-          echo "Signature verification passed"
+          echo "✓ Signing completed successfully"
         else
-          echo "Signature verification failed"
+          echo "✗ Signing failed"
+          echo "Full codesign output:"
+          codesign --force --deep --options runtime --sign "$IDENTITY" --timestamp -v "$APP_NAME" 2>&1 || true
           exit 1
         fi
         
-        # Check Hardened Runtime
-        if codesign -dv --verbose=4 "$APP_NAME" 2>&1 | grep -q "flags=.*runtime"; then
-          echo "Hardened Runtime enabled"
+        # Verify signature
+        echo "Verifying signature..."
+        codesign --verify --deep --strict --verbose=2 "$APP_NAME"
+        
+        if [ $? -eq 0 ]; then
+          echo "✓ Signature verification passed"
+          
+          # Check Hardened Runtime
+          if codesign -dv --verbose=4 "$APP_NAME" 2>&1 | grep -q "flags=.*runtime"; then
+            echo "✓ Hardened Runtime enabled"
+          else
+            echo "⚠ Hardened Runtime flag not detected"
+            codesign -dv --verbose=4 "$APP_NAME"
+          fi
+          
+          # Display signing info
+          echo "Signing identity used:"
+          codesign -dv --verbose=2 "$APP_NAME" | grep -E "(Authority|Signed Time|Authority=Apple)"
         else
-          echo "Warning: Hardened Runtime not detected"
+          echo "✗ Signature verification failed"
+          codesign -dv --verbose=4 "$APP_NAME"
+          exit 1
         fi
 
     - name: Notarize the app bundle
@@ -230,22 +259,62 @@ jobs:
       run: |
         APP_NAME="SR Player.app"
         
-        # Create ZIP for notarization, required for app bundles
-        echo "Creating notarization ZIP..."
-        ditto -c -k --keepParent "$APP_NAME" "SR-Player.zip"
+        echo "Creating ZIP for notarization..."
+        ZIP_NAME="SR-Player-${{ github.ref_name }}.zip"
+        ditto -c -k --keepParent "$APP_NAME" "$ZIP_NAME"
+        
+        if [ $? -ne 0 ]; then
+          echo "✗ Failed to create notarization ZIP"
+          exit 1
+        fi
+        
+        echo "ZIP created: $(du -h "$ZIP_NAME")"
         
         # Submit for notarization
         echo "Submitting to Apple Notary Service..."
-        xcrun notarytool submit "SR-Player.zip" \
+        echo "Apple ID: ${{ secrets.APPLE_ID }}"
+        echo "Team ID: ${{ secrets.APPLE_TEAM_ID }}"
+        # Don't echo password for security
+        
+        xcrun notarytool submit "$ZIP_NAME" \
           --apple-id "$APPLE_ID" \
           --password "$APPLE_APP_PASSWORD" \
           --team-id "$APPLE_TEAM_ID" \
-          --wait
-        
+          --wait \
+          --output-format json > notarization.log 2>&1
+          
         if [ $? -eq 0 ]; then
-          echo "Notarization successful"
+          echo "✓ Notarization submitted successfully"
+          echo "Notarization status:"
+          cat notarization.log
         else
-          echo "Notarization failed - check credentials"
+          echo "✗ Notarization failed"
+          echo "Full output:"
+          cat notarization.log
+          exit 1
+        fi
+        
+        # Check notarization status
+        STATUS=$(cat notarization.log | grep -o '"status":"[^"]*"' | head -1 | cut -d'"' -f4)
+        if [ "$STATUS" = "Accepted" ]; then
+          echo "✓ Notarization status: Accepted"
+        elif [ "$STATUS" = "In Progress" ]; then
+          echo "⚠ Notarization status: In Progress (may take a few minutes)"
+          # Wait a bit more for final status
+          sleep 30
+          xcrun notarytool info "$(cat notarization.log | grep -o '"notarization-upload":"[^"]*"' | cut -d'"' -f4)" \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_APP_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" \
+            --output-format json > final-status.log
+          FINAL_STATUS=$(cat final-status.log | grep -o '"status":"[^"]*"' | head -1 | cut -d'"' -f4)
+          echo "Final status: $FINAL_STATUS"
+          if [ "$FINAL_STATUS" != "Accepted" ]; then
+            echo "✗ Final notarization failed: $FINAL_STATUS"
+            exit 1
+          fi
+        else
+          echo "✗ Notarization failed with status: $STATUS"
           exit 1
         fi
         
@@ -253,27 +322,54 @@ jobs:
         echo "Stapling notarization ticket..."
         xcrun stapler staple "$APP_NAME"
         
-        # Cleanup
-        rm "SR-Player.zip"
+        if [ $? -eq 0 ]; then
+          echo "✓ Ticket stapled successfully"
+        else
+          echo "⚠ Stapling failed (app may still work)"
+        fi
         
-        # Final verification
+        # Final Gatekeeper verification
+        echo "Final Gatekeeper verification:"
         spctl -a -t exec -vv "$APP_NAME"
+        
+        # Cleanup
+        rm "$ZIP_NAME" notarization.log final-status.log 2>/dev/null || true
 
     - name: Create GitHub Release
       uses: softprops/action-gh-release@v2
       if: startsWith(github.ref, 'refs/tags/')
       with:
-        files: SR Player.app
+        files: |
+          SR Player.app
+          SR Player.app.dmg
         generate_release_notes: true
         draft: false
         prerelease: false
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-    - name: Upload release artifact for debugging
+    - name: Create DMG package (optional)
+      if: startsWith(github.ref, 'refs/tags/')
+      run: |
+        APP_NAME="SR Player.app"
+        DMG_NAME="SR-Player-${{ github.ref_name }}.dmg"
+        
+        # Create DMG with hdiutil
+        hdiutil create -volname "SR Player" -srcfolder "$APP_NAME" -ov -format UDZO "$DMG_NAME"
+        
+        if [ $? -eq 0 ]; then
+          echo "✓ DMG created: $DMG_NAME ($(du -h "$DMG_NAME"))"
+        else
+          echo "⚠ DMG creation failed, continuing with .app only"
+        fi
+
+    - name: Upload release artifacts
       if: always()
       uses: actions/upload-artifact@v4
       with:
-        name: sr-player-macos-release-${{ github.sha }}
-        path: SR Player.app
-        retention-days: 7
+        name: sr-player-macos-artifacts-${{ github.ref_name }}
+        path: |
+          SR Player.app
+          SR-Player-*.dmg
+          SR-Player-*.zip
+        retention-days: 30
