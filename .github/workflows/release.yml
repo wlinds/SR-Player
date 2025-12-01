@@ -89,13 +89,17 @@ jobs:
     - name: Sign macOS app
       if: matrix.os == 'macos-latest'
       env:
-        APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        APPLE_CERTIFICATE_NAME: ${{ secrets.APPLE_CERTIFICATE_NAME }}
       run: |
         APP_PATH="target/release/bundle/osx/SR Player.app"
 
+        # Verify signing identity exists
+        echo "Verifying signing identity: $APPLE_CERTIFICATE_NAME"
+        security find-identity -v -p codesigning
+
         # Sign the app with hardened runtime (required for notarization)
-        codesign --force --options runtime --sign "Developer ID Application:${{ secrets.APPLE_CERTIFICATE_NAME }}" \
-          --deep --timestamp "$APP_PATH"
+        codesign --force --deep --options runtime --sign "$APPLE_CERTIFICATE_NAME" \
+          --timestamp "$APP_PATH"
 
         # Verify signature
         codesign --verify --deep --strict "$APP_PATH"
