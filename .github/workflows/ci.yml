@@ -131,8 +131,9 @@ jobs:
         
         echo "Creating $APP_NAME bundle for version $VERSION..."
         rm -rf "$APP_NAME"
-        mkdir -p "$APP_NAME/Contents/{MacOS,Resources}"
-        
+        mkdir -p "$APP_NAME/Contents/MacOS"
+        mkdir -p "$APP_NAME/Contents/Resources"
+
         # Copy binary
         cp "target/release/$BINARY_NAME" "$APP_NAME/Contents/MacOS/$BINARY_NAME"
         chmod +x "$APP_NAME/Contents/MacOS/$BINARY_NAME"
