@@ -245,7 +245,7 @@ jobs:
           
           # Display signing info
           echo "Signing identity used:"
-          codesign -dv --verbose=2 "$APP_NAME" | grep -E "(Authority|Signed Time|Authority=Apple)"
+          codesign -dv --verbose=2 "$APP_NAME" 2>&1 | grep -E "(Authority|Signed Time|Authority=Apple)" || true
         else
           echo "✗ Signature verification failed"
           codesign -dv --verbose=4 "$APP_NAME"
