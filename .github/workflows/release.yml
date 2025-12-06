@@ -153,11 +153,11 @@ jobs:
         fi
 
         echo "Submission ID: $SUBMISSION_ID"
-        echo "Waiting for notarization (polling for up to 15 minutes)..."
+        echo "Waiting for notarization (polling for up to 30 minutes)..."
 
         # Poll for notarization status with timeout
-        MAX_WAIT_SECONDS=900  # 15 minutes
-        WAIT_INTERVAL=15      # Check every 15 seconds
+        MAX_WAIT_SECONDS=1800  # 30 minutes
+        WAIT_INTERVAL=15       # Check every 15 seconds
         ELAPSED=0
         STATUS="In Progress"
 
@@ -303,9 +303,7 @@ jobs:
           1. Download `SR-Player-${{ github.ref_name }}-macos.zip`
           2. Unzip the file
           3. Drag `SR Player.app` to your Applications folder
-          4. **First launch:** Right-click the app and select "Open", then click "Open" in the dialog
-             - Or: Go to System Settings > Privacy & Security and click "Open Anyway"
-             - This is only needed once due to the app being code-signed but not notarized
+          4. Double-click to launch
 
           #### Linux
           1. Download `sr-player-${{ github.ref_name }}-linux.tar.gz`
