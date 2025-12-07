@@ -64,6 +64,157 @@ jobs:
       if: matrix.os == 'macos-latest'
       run: cargo bundle --release
 
+    - name: Import Code Signing Certificate (macOS)
+      if: matrix.os == 'macos-latest'
+      env:
+        APPLE_CERTIFICATE_BASE64: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
+        APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+      run: |
+        # Create temporary keychain
+        KEYCHAIN_PATH=$RUNNER_TEMP/signing.keychain-db
+        KEYCHAIN_PASSWORD=$(openssl rand -base64 32)
+
+        security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+        security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+        security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+        # Import certificate
+        echo "$APPLE_CERTIFICATE_BASE64" | base64 --decode > $RUNNER_TEMP/certificate.p12
+        security import $RUNNER_TEMP/certificate.p12 -P "$APPLE_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+        security list-keychain -d user -s "$KEYCHAIN_PATH"
+
+        # Allow codesign to access the key
+        security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+    - name: Sign macOS app
+      if: matrix.os == 'macos-latest'
+      env:
+        APPLE_CERTIFICATE_NAME: ${{ secrets.APPLE_CERTIFICATE_NAME }}
+      run: |
+        APP_PATH="target/release/bundle/osx/SR Player.app"
+
+        # Verify signing identity exists
+        echo "Verifying signing identity: $APPLE_CERTIFICATE_NAME"
+        security find-identity -v -p codesigning
+
+        # Sign the app with hardened runtime (required for notarization)
+        codesign --force --deep --options runtime --sign "$APPLE_CERTIFICATE_NAME" \
+          --timestamp "$APP_PATH"
+
+        # Verify signature
+        codesign --verify --deep --strict "$APP_PATH"
+
+    - name: Notarize macOS app
+      if: matrix.os == 'macos-latest'
+      continue-on-error: true
+      timeout-minutes: 30
+      env:
+        APPLE_ID: ${{ secrets.APPLE_ID }}
+        APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+        APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      run: |
+        APP_PATH="target/release/bundle/osx/SR Player.app"
+
+        # Create ZIP for notarization
+        ditto -c -k --keepParent "$APP_PATH" "SR-Player-notarize.zip"
+
+        echo "Submitting to Apple Notary Service..."
+
+        # Submit for notarization with retry logic
+        MAX_RETRIES=3
+        RETRY_COUNT=0
+        SUBMISSION_ID=""
+
+        while [ $RETRY_COUNT -lt $MAX_RETRIES ] && [ -z "$SUBMISSION_ID" ]; do
+          echo "Attempt $((RETRY_COUNT + 1))/$MAX_RETRIES to submit..."
+
+          SUBMIT_OUTPUT=$(xcrun notarytool submit "SR-Player-notarize.zip" \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_APP_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" \
+            2>&1 || true)
+
+          echo "$SUBMIT_OUTPUT"
+
+          SUBMISSION_ID=$(echo "$SUBMIT_OUTPUT" | grep "id:" | head -n1 | awk '{print $2}')
+
+          if [ -z "$SUBMISSION_ID" ]; then
+            RETRY_COUNT=$((RETRY_COUNT + 1))
+            if [ $RETRY_COUNT -lt $MAX_RETRIES ]; then
+              echo "Submission failed, waiting 30 seconds before retry..."
+              sleep 30
+            fi
+          fi
+        done
+
+        if [ -z "$SUBMISSION_ID" ]; then
+          echo "Failed to get submission ID after $MAX_RETRIES attempts"
+          exit 1
+        fi
+
+        echo "Submission ID: $SUBMISSION_ID"
+        echo "Waiting for notarization (polling for up to 30 minutes)..."
+
+        # Poll for notarization status with timeout
+        MAX_WAIT_SECONDS=1800  # 30 minutes
+        WAIT_INTERVAL=15       # Check every 15 seconds
+        ELAPSED=0
+        STATUS="In Progress"
+
+        while [ $ELAPSED -lt $MAX_WAIT_SECONDS ] && [ "$STATUS" = "In Progress" ]; do
+          sleep $WAIT_INTERVAL
+          ELAPSED=$((ELAPSED + WAIT_INTERVAL))
+
+          # Only print status every minute to reduce log spam
+          if [ $((ELAPSED % 60)) -eq 0 ] || [ $ELAPSED -eq 15 ]; then
+            echo "Checking status (${ELAPSED}s / ${MAX_WAIT_SECONDS}s elapsed)..."
+          fi
+
+          INFO_OUTPUT=$(xcrun notarytool info "$SUBMISSION_ID" \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_APP_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" 2>&1 || true)
+
+          # Check for network errors
+          if echo "$INFO_OUTPUT" | grep -q "NSURLErrorDomain\|connection.*offline\|HTTPError"; then
+            echo "Network error detected, retrying..."
+            continue
+          fi
+
+          # Only print output every minute to reduce log spam
+          if [ $((ELAPSED % 60)) -eq 0 ] || [ $ELAPSED -eq 15 ]; then
+            echo "$INFO_OUTPUT"
+          fi
+
+          STATUS=$(echo "$INFO_OUTPUT" | grep "status:" | awk '{print $2}')
+
+          if [ "$STATUS" = "Accepted" ]; then
+            echo "Notarization completed successfully"
+
+            # Staple the notarization ticket to the app
+            echo "Stapling notarization ticket..."
+            xcrun stapler staple "$APP_PATH"
+            break
+          elif [ "$STATUS" = "Invalid" ] || [ "$STATUS" = "Rejected" ]; then
+            echo "Notarization failed with status: $STATUS"
+            echo "Getting detailed logs..."
+            xcrun notarytool log "$SUBMISSION_ID" \
+              --apple-id "$APPLE_ID" \
+              --password "$APPLE_APP_PASSWORD" \
+              --team-id "$APPLE_TEAM_ID" || echo "Could not retrieve logs"
+            exit 1
+          fi
+        done
+
+        if [ $ELAPSED -ge $MAX_WAIT_SECONDS ] && [ "$STATUS" = "In Progress" ]; then
+          echo "Notarization timed out after ${MAX_WAIT_SECONDS}s"
+          echo "WARNING: App is code-signed but not notarized. Users will need to use 'Open Anyway' in System Settings."
+          exit 1
+        fi
+
+        # Clean up
+        rm "SR-Player-notarize.zip"
+
     - name: Build Linux binary
       if: matrix.os == 'ubuntu-latest'
       run: cargo build --release
@@ -152,7 +303,7 @@ jobs:
           1. Download `SR-Player-${{ github.ref_name }}-macos.zip`
           2. Unzip the file
           3. Drag `SR Player.app` to your Applications folder
-          4. Right-click and select "Open" (first time only, due to macOS Gatekeeper)
+          4. Double-click to launch
 
           #### Linux
           1. Download `sr-player-${{ github.ref_name }}-linux.tar.gz`
@@ -175,15 +326,30 @@ jobs:
 
           **Note:** Windows may show a security warning for unsigned software. Click "More info" → "Run anyway".
 
-          ### What's New in v0.5.4
+          ### What's New in v0.6.0
 
           **New Features:**
+          - Auto-play next episode when current one finishes
+          - Add share button to copy episode URL to clipboard
+          - Show "Copied to clipboard" status message
+
+          **Fixes:**
+          - Fix gapless streaming logic and player state management
+          - Fix volume bug when seeking first time in podcast playback
+          - Fix window icon display in taskbar and title bar (PNG for cross-platform)
+          - Fix NowPlaying text overflow when window is resized
+
+          **Improvements:**
+          - Major refactor: migrate callbacks to callbacks.rs, bundle shared state in app_state.rs
+          - Add improved API caching for schedule, programs, and episodes
+          - Add seek_handler module for cleaner seek logic
+          - Clean up comments throughout codebase
+
+          **Previous Features:**
           - Favorites tab for quick access to your favorite channels and podcasts
           - Favorite channels and podcasts with star button (persists across app restarts)
           - Podcast search function to quickly find programs
           - Favorites stored in ~/.config/sr-player/favorites.json
-
-          **Previous Features:**
           - Multi-channel support with instant channel switching
           - DVR buffer for rewinding live radio streams
           - Podcast/episode playback with download caching

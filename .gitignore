@@ -22,3 +22,7 @@ target
 
 # macOS
 .DS_Store
+
+.env
+
+build-sign-macos.sh
