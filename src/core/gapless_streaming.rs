@@ -458,8 +458,11 @@ impl GaplessPlayer {
                         s.bitrate_kbps = s.download_speed_kbps;
                     }
                     live_buffer.push(chunk.clone()).await;
-                    if buffer_start_time.lock().await.is_none() {
-                        *buffer_start_time.lock().await = Some(Instant::now());
+                    {
+                        let mut bst = buffer_start_time.lock().await;
+                        if bst.is_none() {
+                            *bst = Some(Instant::now());
+                        }
                     }
                     if data_tx.send(chunk).is_err() {
                         return Ok(());

@@ -58,6 +58,14 @@ pub struct ScheduleRightNowResponse {
     pub pagination: Option<Pagination>,
 }
 
+/// Response from the single-channel schedule endpoint
+/// (uses "channel" singular instead of "channels" array)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SingleChannelScheduleResponse {
+    pub channel: ChannelSchedule,
+    pub copyright: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChannelSchedule {
     pub id: u32,

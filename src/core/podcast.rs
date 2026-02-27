@@ -243,6 +243,7 @@ pub fn programs_to_items_news(
 pub async fn fetch_episodes_for_program(
     api_client: &SrApiClient,
     program_id: u32,
+    language: crate::localization::Language,
 ) -> Result<(Vec<EpisodeItem>, String)> {
     let api_clone = api_client.clone();
 
@@ -259,7 +260,7 @@ pub async fn fetch_episodes_for_program(
     let episode_items: Vec<EpisodeItem> = episodes.iter().filter_map(episode_to_item).collect();
 
     // Use a generic program name (the UI already knows which program was selected)
-    let program_name = String::from("Podcast Episodes");
+    let program_name = crate::translations::translate("Podcast Episodes", language);
 
     Ok((episode_items, program_name))
 }

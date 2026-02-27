@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 
 use crate::core::models::{
     Channel, ChannelsResponse, Episode, EpisodesResponse, Program, ProgramsResponse,
-    ScheduleRightNowResponse,
+    ScheduleRightNowResponse, SingleChannelScheduleResponse,
 };
 
 const SR_API_BASE: &str = "https://api.sr.se/api/v2";
@@ -89,6 +89,7 @@ impl SrApiClient {
         Ok(channels_response.channels)
     }
 
+    #[allow(dead_code)]
     pub fn get_schedule_right_now(&self) -> Result<ScheduleRightNowResponse> {
         // Check cache
         {
@@ -128,6 +129,46 @@ impl SrApiClient {
         }
 
         Ok(schedule)
+    }
+
+    /// Fetch the current schedule for a single channel (smaller payload than all channels)
+    pub fn get_schedule_for_channel(&self, channel_id: i32) -> Result<ScheduleRightNowResponse> {
+        // Check cache first - if all-channels cache is fresh, use that
+        {
+            let cache = self.schedule_cache.lock().unwrap();
+            if let (Some(data), Some(last_fetch)) = (&cache.data, cache.last_fetch) {
+                if last_fetch.elapsed() < SCHEDULE_CACHE_TTL {
+                    debug!(
+                        "Using cached schedule for channel {} (age: {:.1}s)",
+                        channel_id,
+                        last_fetch.elapsed().as_secs_f32()
+                    );
+                    return Ok(data.clone());
+                }
+            }
+        }
+
+        let url = format!(
+            "{}/scheduledepisodes/rightnow?channelid={}&format=json&pagination=false",
+            SR_API_BASE, channel_id
+        );
+        info!("Fetching schedule for channel {}", channel_id);
+
+        let response = self
+            .client
+            .get(&url)
+            .send()
+            .context("Failed to fetch channel schedule")?;
+
+        // Single-channel endpoint returns {"channel": {...}} instead of {"channels": [...]}
+        let single: SingleChannelScheduleResponse =
+            response.json().context("Failed to parse channel schedule JSON")?;
+
+        Ok(ScheduleRightNowResponse {
+            copyright: single.copyright,
+            channels: vec![single.channel],
+            pagination: None,
+        })
     }
 
     pub fn get_programs_with_podcasts(&self) -> Result<Vec<Program>> {

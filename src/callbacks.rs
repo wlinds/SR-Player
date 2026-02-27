@@ -18,13 +18,65 @@ use std::rc::Rc;
 // HELPER FUNCTIONS
 // ============================================================================
 
+/// Update all translation properties in the UI for the given language
+pub fn update_all_translations(ui: &MainWindow, language: crate::localization::Language) {
+    ui.set_tr_live(crate::translations::translate("Live", language).into());
+    ui.set_tr_podcasts(crate::translations::translate("Podcasts", language).into());
+    ui.set_tr_news(crate::translations::translate("News", language).into());
+    ui.set_tr_music(crate::translations::translate("Music", language).into());
+    ui.set_tr_favorites(crate::translations::translate("Favorites", language).into());
+    ui.set_tr_settings(crate::translations::translate("Settings", language).into());
+    ui.set_tr_vol(crate::translations::translate("Vol:", language).into());
+    ui.set_tr_live_indicator(crate::translations::translate("LIVE", language).into());
+    ui.set_tr_language_label(crate::translations::translate("Language:", language).into());
+    ui.set_tr_browse_podcasts(crate::translations::translate("Browse Podcasts", language).into());
+    ui.set_tr_back(crate::translations::translate("← Back", language).into());
+    ui.set_tr_loading_channels(crate::translations::translate("Loading channels...", language).into());
+    ui.set_tr_loading_programs(crate::translations::translate("Loading programs...", language).into());
+    ui.set_tr_loading_news(crate::translations::translate("Loading news programs...", language).into());
+    ui.set_tr_no_channels(crate::translations::translate("No channels found", language).into());
+    ui.set_tr_no_programs(crate::translations::translate("No programs found", language).into());
+    ui.set_tr_no_episodes(crate::translations::translate("No episodes found", language).into());
+    ui.set_tr_no_news(crate::translations::translate("No news programs found", language).into());
+    ui.set_tr_no_favorites(crate::translations::translate("No favorites yet. Click the star icon on channels or podcasts to add them.", language).into());
+    ui.set_tr_search_podcasts(crate::translations::translate("Search podcasts...", language).into());
+    ui.set_tr_music_coming_soon(crate::translations::translate("Music content coming soon...", language).into());
+
+    // Update tab labels (Settings removed - now in status bar)
+    use slint::{ModelRc, VecModel};
+    use std::rc::Rc;
+    let tabs = vec![
+        crate::TabItem {
+            id: 0,
+            label: crate::translations::translate("Live", language).into(),
+        },
+        crate::TabItem {
+            id: 1,
+            label: crate::translations::translate("Podcasts", language).into(),
+        },
+        crate::TabItem {
+            id: 2,
+            label: crate::translations::translate("News", language).into(),
+        },
+        crate::TabItem {
+            id: 3,
+            label: crate::translations::translate("Music", language).into(),
+        },
+        crate::TabItem {
+            id: 4,
+            label: crate::translations::translate("Favorites", language).into(),
+        },
+    ];
+    ui.set_tabs(ModelRc::from(Rc::new(VecModel::from(tabs))));
+}
+
 /// Helper to fetch program info from schedule for a channel
 pub async fn fetch_program_info_for_channel(
     api_client: &SrApiClient,
     channel_id: i32,
 ) -> Option<core::models::ScheduledEpisode> {
     let api_clone = api_client.clone();
-    tokio::task::spawn_blocking(move || match api_clone.get_schedule_right_now() {
+    tokio::task::spawn_blocking(move || match api_clone.get_schedule_for_channel(channel_id) {
         Ok(schedule) => schedule
             .channels
             .iter()
@@ -230,7 +282,7 @@ fn setup_playback_controls(ui: &MainWindow, app_state: &AppState) {
         let state = app_state.clone();
 
         ui.on_play_pause_clicked(move || {
-            let ui_clone = ui_weak.upgrade().unwrap();
+            let Some(ui_clone) = ui_weak.upgrade() else { return };
             let is_playing = ui_clone.get_is_playing();
             let current_player = state.get_active_player();
 
@@ -327,11 +379,11 @@ fn setup_tab_callbacks(ui: &MainWindow, app_state: &AppState, api_client: &SrApi
 
         ui.on_podcasts_tab_clicked(move || {
             let Some(ui) = ui_weak.upgrade() else { return };
-            let has_cached = { !state.all_programs.lock().unwrap().is_empty() };
+            let has_cached = state.all_programs.lock().ok().map_or(false, |p| !p.is_empty());
 
             if has_cached {
-                let programs = state.all_programs.lock().unwrap();
-                let favorites_lock = state.favorites.lock().unwrap();
+                let Ok(programs) = state.all_programs.lock() else { return };
+                let Ok(favorites_lock) = state.favorites.lock() else { return };
                 let mut items = core::podcast::programs_to_items_podcasts(&programs);
                 for item in &mut items {
                     item.is_favorite = favorites_lock.is_program_favorite(item.id);
@@ -343,9 +395,11 @@ fn setup_tab_callbacks(ui: &MainWindow, app_state: &AppState, api_client: &SrApi
                 let api = api_clone.clone();
                 state.spawn(async move {
                     if let Ok(programs) = core::podcast::fetch_programs_with_podcasts(&api).await {
-                        *state_inner.all_programs.lock().unwrap() = programs.clone();
+                        if let Ok(mut all) = state_inner.all_programs.lock() {
+                            *all = programs.clone();
+                        }
                         let _ = ui_clone.upgrade_in_event_loop(move |ui| {
-                            let favorites_lock = state_inner.favorites.lock().unwrap();
+                            let Ok(favorites_lock) = state_inner.favorites.lock() else { return };
                             let mut items = core::podcast::programs_to_items_podcasts(&programs);
                             for item in &mut items {
                                 item.is_favorite = favorites_lock.is_program_favorite(item.id);
@@ -367,12 +421,12 @@ fn setup_tab_callbacks(ui: &MainWindow, app_state: &AppState, api_client: &SrApi
 
         ui.on_news_tab_clicked(move || {
             let Some(ui) = ui_weak.upgrade() else { return };
-            let has_cached = { !state.all_programs.lock().unwrap().is_empty() };
+            let has_cached = state.all_programs.lock().ok().map_or(false, |p| !p.is_empty());
 
             if has_cached {
-                let programs = state.all_programs.lock().unwrap();
-                let groups = state.groups_expanded.lock().unwrap();
-                let favorites_lock = state.favorites.lock().unwrap();
+                let Ok(programs) = state.all_programs.lock() else { return };
+                let Ok(groups) = state.groups_expanded.lock() else { return };
+                let Ok(favorites_lock) = state.favorites.lock() else { return };
                 let mut items = core::podcast::programs_to_items_news(&programs, &groups);
                 for item in &mut items {
                     item.is_favorite = favorites_lock.is_program_favorite(item.id);
@@ -384,10 +438,12 @@ fn setup_tab_callbacks(ui: &MainWindow, app_state: &AppState, api_client: &SrApi
                 let api = api_clone.clone();
                 state.spawn(async move {
                     if let Ok(programs) = core::podcast::fetch_programs_with_podcasts(&api).await {
-                        *state_inner.all_programs.lock().unwrap() = programs.clone();
+                        if let Ok(mut all) = state_inner.all_programs.lock() {
+                            *all = programs.clone();
+                        }
                         let _ = ui_clone.upgrade_in_event_loop(move |ui| {
-                            let groups = state_inner.groups_expanded.lock().unwrap();
-                            let favorites_lock = state_inner.favorites.lock().unwrap();
+                            let Ok(groups) = state_inner.groups_expanded.lock() else { return };
+                            let Ok(favorites_lock) = state_inner.favorites.lock() else { return };
                             let mut items =
                                 core::podcast::programs_to_items_news(&programs, &groups);
                             for item in &mut items {
@@ -420,9 +476,10 @@ fn setup_program_callbacks(ui: &MainWindow, app_state: &AppState, api_client: &S
             let ui_clone = ui_weak.clone();
             let api = api_clone.clone();
             let state_clone = state.clone();
+            let language = state.get_language();
             state.spawn(async move {
                 if let Ok((episodes, name)) =
-                    core::podcast::fetch_episodes_for_program(&api, program_id as u32).await
+                    core::podcast::fetch_episodes_for_program(&api, program_id as u32, language).await
                 {
                     // Store episodes for auto-play
                     state_clone.set_current_episodes(episodes.clone());
@@ -449,9 +506,10 @@ fn setup_program_callbacks(ui: &MainWindow, app_state: &AppState, api_client: &S
             let ui_clone = ui_weak.clone();
             let api = api_clone.clone();
             let state_clone = state.clone();
+            let language = state.get_language();
             state.spawn(async move {
                 if let Ok((episodes, name)) =
-                    core::podcast::fetch_episodes_for_program(&api, program_id as u32).await
+                    core::podcast::fetch_episodes_for_program(&api, program_id as u32, language).await
                 {
                     // Store episodes for auto-play
                     state_clone.set_current_episodes(episodes.clone());
@@ -485,11 +543,11 @@ fn setup_program_callbacks(ui: &MainWindow, app_state: &AppState, api_client: &S
         ui.on_group_toggled(move |group_id| {
             let Some(ui) = ui_weak.upgrade() else { return };
 
-            let mut groups_lock = state.groups_expanded.lock().unwrap();
+            let Ok(mut groups_lock) = state.groups_expanded.lock() else { return };
             let current = groups_lock.get(&group_id).copied().unwrap_or(false);
             groups_lock.insert(group_id, !current);
 
-            let all_programs_lock = state.all_programs.lock().unwrap();
+            let Ok(all_programs_lock) = state.all_programs.lock() else { return };
             refresh_program_list(&ui, &all_programs_lock, &groups_lock);
         });
     }
@@ -506,7 +564,7 @@ fn setup_program_callbacks(ui: &MainWindow, app_state: &AppState, api_client: &S
             let Some(ui) = ui_weak.upgrade() else { return };
 
             let query = search_query.to_lowercase();
-            let programs = state.all_programs.lock().unwrap();
+            let Ok(programs) = state.all_programs.lock() else { return };
 
             let filtered: Vec<ProgramItem> = if query.is_empty() {
                 core::podcast::programs_to_items_podcasts(&programs)
@@ -563,10 +621,13 @@ fn setup_episode_callback(ui: &MainWindow, app_state: &AppState) {
         ui.set_playback_position(0.0);
         ui.set_program_duration(0.0);
 
-        let program_image_url = {
-            let all_programs_lock = state.all_programs.lock().unwrap();
-            core::podcast::get_program_image_url(&all_programs_lock, ui.get_selected_program_id())
-        };
+        let program_image_url = state
+            .all_programs
+            .lock()
+            .ok()
+            .and_then(|all_programs_lock| {
+                core::podcast::get_program_image_url(&all_programs_lock, ui.get_selected_program_id())
+            });
 
         if let Some(image_url) = program_image_url {
             let ui_clone = ui_weak.clone();
@@ -599,6 +660,7 @@ fn setup_episode_callback(ui: &MainWindow, app_state: &AppState) {
         state.set_current_episode_url(Some(url.clone()));
 
         let state_inner = state.clone();
+        let state_for_translation = state.clone();
         let ui_weak_for_download = ui_weak.clone();
         let ui_weak_for_playback = ui_weak.clone();
         let url_for_download = url.clone();
@@ -618,9 +680,12 @@ fn setup_episode_callback(ui: &MainWindow, app_state: &AppState) {
                     };
 
                     let ui_for_clear = ui_weak_for_download.clone();
+                    let state_clone = state_for_translation.clone();
                     let _ = ui_weak_for_download.upgrade_in_event_loop(move |ui| {
+                        let language = state_clone.get_language();
                         if downloaded >= total && total > 0 {
-                            ui.set_download_status("Downloaded (100%)".into());
+                            let downloaded_text = crate::translations::translate("Downloaded", language);
+                            ui.set_download_status(format!("{} (100%)", downloaded_text).into());
                             slint::Timer::single_shot(
                                 std::time::Duration::from_secs(2),
                                 move || {
@@ -630,7 +695,8 @@ fn setup_episode_callback(ui: &MainWindow, app_state: &AppState) {
                                 },
                             );
                         } else {
-                            ui.set_download_status(format!("Downloading ({}%)", percent).into());
+                            let downloading_text = crate::translations::translate("Downloading", language);
+                            ui.set_download_status(format!("{} ({}%)", downloading_text, percent).into());
                         }
                     });
                 });
@@ -668,7 +734,7 @@ fn setup_favorite_callbacks(ui: &MainWindow, app_state: &AppState) {
         ui.on_toggle_favorite_channel(move |id| {
             let Some(ui) = ui_weak.upgrade() else { return };
             let is_fav = {
-                let mut fav = state.favorites.lock().unwrap();
+                let Ok(mut fav) = state.favorites.lock() else { return };
                 let r = fav.toggle_channel(id);
                 let _ = fav.save();
                 r
@@ -704,7 +770,7 @@ fn setup_favorite_callbacks(ui: &MainWindow, app_state: &AppState) {
         ui.on_toggle_favorite_program(move |id| {
             let Some(ui) = ui_weak.upgrade() else { return };
             let is_fav = {
-                let mut fav = state.favorites.lock().unwrap();
+                let Ok(mut fav) = state.favorites.lock() else { return };
                 let r = fav.toggle_program(id);
                 let _ = fav.save();
                 r
@@ -754,6 +820,7 @@ fn setup_misc_callbacks(ui: &MainWindow, app_state: &AppState) {
     // Share button - copy episode URL to clipboard
     {
         let ui_weak = ui.as_weak();
+        let state = app_state.clone();
 
         ui.on_share_clicked(move |episode_url| {
             let url = episode_url.to_string();
@@ -781,10 +848,17 @@ fn setup_misc_callbacks(ui: &MainWindow, app_state: &AppState) {
             #[cfg(target_os = "windows")]
             {
                 use std::process::Command;
-                // Use PowerShell to set clipboard on Windows
-                let _ = Command::new("powershell")
-                    .args(["-command", &format!("Set-Clipboard -Value '{}'", url)])
-                    .output();
+                // Use clip.exe via stdin to avoid command injection
+                let _ = Command::new("clip")
+                    .stdin(std::process::Stdio::piped())
+                    .spawn()
+                    .and_then(|mut child| {
+                        use std::io::Write;
+                        if let Some(stdin) = child.stdin.as_mut() {
+                            stdin.write_all(url.as_bytes())?;
+                        }
+                        child.wait()
+                    });
             }
 
             #[cfg(target_os = "linux")]
@@ -822,7 +896,9 @@ fn setup_misc_callbacks(ui: &MainWindow, app_state: &AppState) {
 
             // Show status message in UI
             if let Some(ui_handle) = ui_weak.upgrade() {
-                ui_handle.set_clipboard_status(format!("Copied: {}", url).into());
+                let language = state.get_language();
+                let copied_text = crate::translations::translate("Copied", language);
+                ui_handle.set_clipboard_status(format!("{}: {}", copied_text, url).into());
 
                 // Clear status after 2 seconds
                 let ui_weak_for_clear = ui_weak.clone();
@@ -831,6 +907,27 @@ fn setup_misc_callbacks(ui: &MainWindow, app_state: &AppState) {
                         ui.set_clipboard_status("".into());
                     }
                 });
+            }
+        });
+    }
+
+    // Language changed callback
+    {
+        let state = app_state.clone();
+        let ui_weak = ui.as_weak();
+
+        ui.on_language_changed(move |language_code| {
+            let code = language_code.to_string();
+
+            // Parse language code and update UI translations
+            if let Some(language) = crate::localization::Language::from_code(&code) {
+                // Update all translation properties in the UI
+                if let Some(ui) = ui_weak.upgrade() {
+                    update_all_translations(&ui, language);
+                }
+
+                // Save language preference to disk
+                state.set_language(language);
             }
         });
     }

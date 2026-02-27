@@ -21,6 +21,8 @@
 mod app_state;
 mod callbacks;
 mod core;
+mod localization;
+mod translations;
 
 // Use statements
 use app_state::AppState;
@@ -30,6 +32,7 @@ use core::episode_cache::EpisodeCache;
 use core::favorites::Favorites;
 use core::file_player_send_safe::SendSafeFilePlayer;
 use core::gapless_send_safe::SendSafeGaplessPlayer;
+use core::settings::Settings;
 
 use slint::{Model, ModelRc, VecModel};
 use std::collections::HashMap;
@@ -40,7 +43,7 @@ use std::sync::Arc;
 slint::include_modules!();
 
 // ============================================================================
-// HELPER FUNCTIONS
+// DATA INITIALIZATION
 // ============================================================================
 
 /// Initialize channels from API and return both channel map and UI model
@@ -106,8 +109,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let file_player = Arc::new(SendSafeFilePlayer::new()?);
     let episode_cache = EpisodeCache::new();
     let favorites = Favorites::load();
+    let settings = Settings::load();
 
-    println!("Favorites loaded from disk");
+    println!("Favorites and settings loaded from disk");
 
     // Bundle all shared state
     let app_state = AppState::new(
@@ -116,6 +120,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         file_player,
         episode_cache,
         favorites,
+        settings,
         runtime.handle().clone(),
     );
 
@@ -123,6 +128,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     runtime.block_on(async {
         app_state.set_volume(0.25).await;
     });
+
+    // Set initial language from saved settings
+    let saved_language = app_state.get_language();
+
+    // Update all translation properties in the UI
+    callbacks::update_all_translations(&ui, saved_language);
+
+    // Set the language index in the Settings dropdown to match saved language
+    let language_index = match saved_language {
+        localization::Language::English => 0,
+        localization::Language::Swedish => 1,
+        localization::Language::Arabic => 2,
+    };
+    ui.set_selected_language_index(language_index);
 
     println!("Backend components initialized");
 

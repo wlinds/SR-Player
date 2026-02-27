@@ -23,22 +23,18 @@ pub fn parse_sr_date_to_time(date_str: &str) -> String {
     String::from("--:--")
 }
 
-/// Download image bytes from a URL
-///
-/// Returns raw bytes which are Send-safe for use across threads.
-/// Call this in spawn_blocking, then use bytes_to_slint_image on the main thread.
-pub fn download_image_bytes(url: &str) -> Option<Vec<u8>> {
-    if url.is_empty() {
-        return None;
-    }
-
-    match reqwest::blocking::get(url) {
-        Ok(response) => response.bytes().ok().map(|b| b.to_vec()),
-        Err(e) => {
-            eprintln!("Failed to download image from {}: {}", url, e);
-            None
-        }
-    }
+/// Shared async HTTP client for image downloads (connection pooling)
+fn shared_image_client() -> &'static reqwest::Client {
+    use std::sync::OnceLock;
+    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+    CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .user_agent("SR-Player/3.0")
+            .connect_timeout(std::time::Duration::from_secs(10))
+            .timeout(std::time::Duration::from_secs(15))
+            .build()
+            .expect("Failed to create image HTTP client")
+    })
 }
 
 /// Convert raw image bytes to Slint Image format
@@ -60,14 +56,18 @@ pub fn bytes_to_slint_image(bytes: Vec<u8>) -> Option<Image> {
     }
 }
 
+/// Download image bytes from a URL using shared async client
 pub async fn fetch_image_bytes(url: String) -> Option<Vec<u8>> {
     if url.is_empty() {
         return None;
     }
-    tokio::task::spawn_blocking(move || download_image_bytes(&url))
-        .await
-        .ok()
-        .flatten()
+    match shared_image_client().get(&url).send().await {
+        Ok(response) => response.bytes().await.ok().map(|b| b.to_vec()),
+        Err(e) => {
+            eprintln!("Failed to download image from {}: {}", url, e);
+            None
+        }
+    }
 }
 
 // ============================================================================

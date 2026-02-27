@@ -145,6 +145,9 @@ export component TabContent inherits VerticalBox {
     in property <string> loading-text: "Loading...";
     in property <string> empty-text: "No items found";
 
+    // Translation property for back button
+    in property <string> tr-back: "← Back";
+
     // Special properties for episodes view
     in property <bool> show-back-button: false;
     in property <string> selected-program-name: "";
@@ -201,7 +204,7 @@ export component TabContent inherits VerticalBox {
 
         // Back button for episodes view
         Button {
-            text: "← Back";
+            text: root.tr-back;
             clicked => { back-clicked(); }
         }
 
