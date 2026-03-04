@@ -41,6 +41,9 @@ pub fn update_all_translations(ui: &MainWindow, language: crate::localization::L
     ui.set_tr_no_favorites(crate::translations::translate("No favorites yet. Click the star icon on channels or podcasts to add them.", language).into());
     ui.set_tr_search_podcasts(crate::translations::translate("Search podcasts...", language).into());
     ui.set_tr_music_coming_soon(crate::translations::translate("Music content coming soon...", language).into());
+    ui.set_tr_keep_channels_alive(crate::translations::translate("Keep channels alive (fast switching)", language).into());
+    ui.set_tr_preferences(crate::translations::translate("Preferences...", language).into());
+    ui.set_tr_about(crate::translations::translate("About SR Player", language).into());
 
     // Update tab labels (Settings removed - now in status bar)
     use slint::{ModelRc, VecModel};
@@ -218,6 +221,11 @@ fn setup_channel_selection(
         ui.set_playback_position(0.0);
         ui.set_program_duration(0.0);
 
+        // Show "Connecting..." status
+        let language = state.get_language();
+        let connecting_text = crate::translations::translate("Connecting...", language);
+        ui.set_connection_status(connecting_text.into());
+
         let channel_name = channel_map_clone
             .get(&channel_id)
             .cloned()
@@ -229,11 +237,9 @@ fn setup_channel_selection(
         let api_clone = api_client_clone.clone();
         let state_inner = state.clone();
 
-        state.spawn(async move {
-            state_inner.file_player.stop();
-            state_inner.streaming_player.stop().await;
-            state_inner.set_active_player(ActivePlayer::ChannelPool);
+        let use_pool = state.get_keep_channels_alive();
 
+        state.spawn(async move {
             if let Some(episode) = fetch_program_info_for_channel(&api_clone, channel_id).await {
                 let image_bytes =
                     fetch_image_bytes(episode.social_image.clone().unwrap_or_default()).await;
@@ -247,11 +253,24 @@ fn setup_channel_selection(
             }
 
             let start = std::time::Instant::now();
-            match state_inner
-                .channel_pool
-                .switch_to_channel(channel_id, stream_url)
-                .await
-            {
+            let result = if use_pool {
+                state_inner.file_player.stop();
+                state_inner.streaming_player.stop().await;
+                state_inner.set_active_player(ActivePlayer::ChannelPool);
+                state_inner
+                    .channel_pool
+                    .switch_to_channel(channel_id, stream_url)
+                    .await
+            } else {
+                state_inner.stop_all_players().await;
+                state_inner.set_active_player(ActivePlayer::Streaming);
+                state_inner
+                    .streaming_player
+                    .start_stream(stream_url)
+                    .await
+            };
+
+            match result {
                 Ok(()) => {
                     println!(
                         "Channel switch completed in {}ms",
@@ -261,12 +280,26 @@ fn setup_channel_selection(
                         ui.set_is_playing(true);
                         ui.set_is_loading(false);
                         ui.set_is_live(true);
+                        ui.set_connection_status("".into());
                     });
                 }
                 Err(e) => {
                     eprintln!("Failed to switch channel: {}", e);
+                    let language = state_inner.get_language();
+                    let failed_text = crate::translations::translate("Connection failed", language);
+                    let ui_weak_for_clear = ui_weak_clone.clone();
                     let _ = ui_weak_clone.upgrade_in_event_loop(move |ui| {
                         ui.set_is_loading(false);
+                        ui.set_connection_status(failed_text.into());
+
+                        slint::Timer::single_shot(
+                            std::time::Duration::from_secs(3),
+                            move || {
+                                if let Some(ui) = ui_weak_for_clear.upgrade() {
+                                    ui.set_connection_status("".into());
+                                }
+                            },
+                        );
                     });
                 }
             }
@@ -595,10 +628,18 @@ fn setup_episode_callback(ui: &MainWindow, app_state: &AppState) {
         ui.set_is_loading(true);
         ui.set_current_channel_name("Podcast".into());
 
+        // Show "Connecting..." status
+        let language = state.get_language();
+        let connecting_text = crate::translations::translate("Connecting...", language);
+        ui.set_connection_status(connecting_text.into());
+
         let Some((episode, episode_index)) = find_episode_in_model(&ui.get_episodes(), episode_id)
         else {
             eprintln!("Episode {} not found", episode_id);
-            let _ = ui_weak.upgrade_in_event_loop(|ui| ui.set_is_loading(false));
+            let _ = ui_weak.upgrade_in_event_loop(|ui| {
+                ui.set_is_loading(false);
+                ui.set_connection_status("".into());
+            });
             return;
         };
 
@@ -710,13 +751,28 @@ fn setup_episode_callback(ui: &MainWindow, app_state: &AppState) {
                     let _ = ui_weak_for_playback.upgrade_in_event_loop(|ui| {
                         ui.set_is_playing(true);
                         ui.set_is_loading(false);
+                        ui.set_connection_status("".into());
                     });
                 }
                 Err(e) => {
                     eprintln!("Failed to start stream: {}", e);
-                    let _ = ui_weak_for_playback.upgrade_in_event_loop(|ui| {
+                    let language = state_inner.get_language();
+                    let failed_text =
+                        crate::translations::translate("Connection failed", language);
+                    let ui_weak_for_clear = ui_weak_for_playback.clone();
+                    let _ = ui_weak_for_playback.upgrade_in_event_loop(move |ui| {
                         ui.set_is_playing(false);
                         ui.set_is_loading(false);
+                        ui.set_connection_status(failed_text.into());
+
+                        slint::Timer::single_shot(
+                            std::time::Duration::from_secs(3),
+                            move || {
+                                if let Some(ui) = ui_weak_for_clear.upgrade() {
+                                    ui.set_connection_status("".into());
+                                }
+                            },
+                        );
                     });
                 }
             }
@@ -928,6 +984,22 @@ fn setup_misc_callbacks(ui: &MainWindow, app_state: &AppState) {
 
                 // Save language preference to disk
                 state.set_language(language);
+            }
+        });
+    }
+
+    // Keep channels alive toggle
+    {
+        let state = app_state.clone();
+
+        ui.on_keep_channels_alive_changed(move |enabled| {
+            state.set_keep_channels_alive(enabled);
+            if !enabled {
+                // Stop background channels when disabled
+                let state_inner = state.clone();
+                state.spawn(async move {
+                    state_inner.channel_pool.stop_all().await;
+                });
             }
         });
     }

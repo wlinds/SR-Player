@@ -41,6 +41,11 @@ fn translate_en(key: &str) -> String {
         "Downloaded" => "Downloaded",
         "Copied" => "Copied",
         "Podcast Episodes" => "Podcast Episodes",
+        "Connecting..." => "Connecting...",
+        "Connection failed" => "Connection failed",
+        "Keep channels alive (fast switching)" => "Keep channels alive (fast switching)",
+        "Preferences..." => "Preferences...",
+        "About SR Player" => "About SR Player",
         _ => key, // Return key if not found
     }.to_string()
 }
@@ -73,6 +78,11 @@ fn translate_sv(key: &str) -> String {
         "Downloaded" => "Nedladdad",
         "Copied" => "Kopierad",
         "Podcast Episodes" => "Poddavsnitt",
+        "Connecting..." => "Ansluter...",
+        "Connection failed" => "Anslutningen misslyckades",
+        "Keep channels alive (fast switching)" => "Håll kanaler aktiva (snabbt byte)",
+        "Preferences..." => "Inställningar...",
+        "About SR Player" => "Om SR Player",
         _ => key, // Return key if not found
     }.to_string()
 }
@@ -105,6 +115,11 @@ fn translate_ar(key: &str) -> String {
         "Downloaded" => "تم التحميل",
         "Copied" => "تم النسخ",
         "Podcast Episodes" => "حلقات البودكاست",
+        "Connecting..." => "جاري الاتصال...",
+        "Connection failed" => "فشل الاتصال",
+        "Keep channels alive (fast switching)" => "إبقاء القنوات نشطة (تبديل سريع)",
+        "Preferences..." => "التفضيلات...",
+        "About SR Player" => "حول SR Player",
         _ => key, // Return key if not found
     }.to_string()
 }

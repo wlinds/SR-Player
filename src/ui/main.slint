@@ -60,9 +60,15 @@ export component MainWindow inherits Window {
         Menu {
             title: root.tr-settings;
             MenuItem {
-                title: root.tr-language-label;
+                title: root.tr-preferences;
                 activated => {
                     show-settings = !show-settings;
+                }
+            }
+            MenuItem {
+                title: root.tr-about;
+                activated => {
+                    show-about = !show-about;
                 }
             }
         }
@@ -111,6 +117,7 @@ export component MainWindow inherits Window {
     in-out property <float> program-duration: 0.0;      // Total duration in seconds (live radio programs)
     in-out property <string> download-status: "";       // Download status message
     in-out property <string> clipboard-status: "";      // Clipboard copy status message
+    in-out property <string> connection-status: "";     // Connection status message
     in-out property <float> buffer-depth: 0.0;          // DVR buffer depth in seconds
     in-out property <bool> is-live: true;               // True if at live edge, false if time-shifted
     in-out property <ProgramInfo> current-program: {
@@ -170,6 +177,12 @@ export component MainWindow inherits Window {
     in-out property <string> tr-no-favorites: "No favorites yet. Click the star icon on channels or podcasts to add them.";
     in-out property <string> tr-search-podcasts: "Search podcasts...";
     in-out property <string> tr-music-coming-soon: "Music content coming soon...";
+    in-out property <string> tr-keep-channels-alive: "Keep channels alive (fast switching)";
+    in-out property <string> tr-preferences: "Preferences...";
+    in-out property <string> tr-about: "About SR Player";
+
+    // Settings state
+    in-out property <bool> keep-channels-alive: true;
 
     // Tab labels (populated from Rust with translated strings)
     in-out property <[TabItem]> tabs: [
@@ -182,6 +195,8 @@ export component MainWindow inherits Window {
 
     // Settings overlay state
     in-out property <bool> show-settings: false;
+    // About overlay state
+    in-out property <bool> show-about: false;
 
     // ================================================================
     // CALLBACKS (Event Handlers)
@@ -226,6 +241,7 @@ export component MainWindow inherits Window {
 
     // Settings
     callback language-changed(string);  // (language_code)
+    callback keep-channels-alive-changed(bool);
 
     // Auto-play callback
     callback episode-finished();  // Called when an episode reaches the end
@@ -463,6 +479,21 @@ export component MainWindow inherits Window {
                     Text {
                         text: clipboard-status;
                         color: #4CAF50;
+                        font-size: 10px;
+                    }
+                }
+
+                // Connection status (connecting/failed)
+                if connection-status != "": HorizontalBox {
+                    padding-left: 8px;
+                    padding-right: 8px;
+                    padding-top: 0px;
+                    padding-bottom: 2px;
+                    alignment: center;
+
+                    Text {
+                        text: connection-status;
+                        color: #EFA669;
                         font-size: 10px;
                     }
                 }
@@ -863,7 +894,7 @@ export component MainWindow inherits Window {
         // Settings panel
         Rectangle {
             width: min(300px, parent.width - 40px);
-            height: min(200px, parent.height - 40px);
+            height: min(250px, parent.height - 40px);
             x: (parent.width - self.width) / 2;
             y: (parent.height - self.height) / 2;
             background: #2a2a2a;
@@ -879,12 +910,88 @@ export component MainWindow inherits Window {
                 tr-language-label: root.tr-language-label;
                 tr-live: root.tr-live;
                 tr-podcasts: root.tr-podcasts;
+                tr-keep-channels-alive: root.tr-keep-channels-alive;
 
-                // Bind the language selection
+                // Bind settings state
                 selected-language-index <=> root.selected-language-index;
+                keep-channels-alive <=> root.keep-channels-alive;
 
                 language-changed(code) => {
                     root.language-changed(code);
+                }
+
+                keep-channels-alive-changed(enabled) => {
+                    root.keep-channels-alive-changed(enabled);
+                }
+            }
+        }
+    }
+
+    // ================================================================
+    // ABOUT OVERLAY
+    // ================================================================
+    if show-about: Rectangle {
+        width: 100%;
+        height: 100%;
+        background: #00000080;
+
+        TouchArea {
+            clicked => {
+                show-about = false;
+            }
+        }
+
+        Rectangle {
+            width: min(280px, parent.width - 40px);
+            height: min(220px, parent.height - 40px);
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            background: #2a2a2a;
+            border-radius: 8px;
+
+            TouchArea {
+                // Prevent clicks from closing about
+            }
+
+            VerticalBox {
+                padding: 24px;
+                spacing: 12px;
+                alignment: center;
+
+                Image {
+                    source: @image-url("../assets/icons/icon.png");
+                    width: 64px;
+                    height: 64px;
+                    horizontal-alignment: center;
+                }
+
+                Text {
+                    text: "SR Player";
+                    font-size: 20px;
+                    font-weight: 700;
+                    color: #ffffff;
+                    horizontal-alignment: center;
+                }
+
+                Text {
+                    text: "Version 0.6.3";
+                    font-size: 13px;
+                    color: #aaaaaa;
+                    horizontal-alignment: center;
+                }
+
+                Text {
+                    text: "Sveriges Radio streaming player\nwith gapless playback";
+                    font-size: 12px;
+                    color: #888888;
+                    horizontal-alignment: center;
+                }
+
+                Text {
+                    text: "\u{00A9} 2025 SR Player Contributors";
+                    font-size: 11px;
+                    color: #666666;
+                    horizontal-alignment: center;
                 }
             }
         }

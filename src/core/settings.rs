@@ -12,12 +12,20 @@ use std::path::PathBuf;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Settings {
     pub language: Language,
+    /// Keep background channels streaming for instant switching (uses more bandwidth)
+    #[serde(default = "default_true")]
+    pub keep_channels_alive: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl Default for Settings {
     fn default() -> Self {
         Self {
             language: Language::default(), // Swedish
+            keep_channels_alive: true,
         }
     }
 }

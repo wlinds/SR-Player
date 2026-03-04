@@ -2,7 +2,7 @@
 //
 // Displays user settings including language selection
 
-import { VerticalBox, HorizontalBox, ComboBox } from "std-widgets.slint";
+import { VerticalBox, HorizontalBox, ComboBox, CheckBox } from "std-widgets.slint";
 
 export struct LanguageOption {
     code: string,
@@ -18,15 +18,18 @@ export component Settings inherits Rectangle {
     ];
 
     in-out property <int> selected-language-index: 1; // Default to Swedish (index 1)
+    in-out property <bool> keep-channels-alive: true;
 
     // Translation strings (passed from MainWindow)
     in property <string> tr-settings;
     in property <string> tr-language-label;
     in property <string> tr-live;
     in property <string> tr-podcasts;
+    in property <string> tr-keep-channels-alive;
 
     // Callbacks
     callback language-changed(string /* language code */);
+    callback keep-channels-alive-changed(bool);
 
     background: #1a1a1a;
 
@@ -69,6 +72,15 @@ export component Settings inherits Rectangle {
                     }
                 }
                 horizontal-stretch: 1;
+            }
+        }
+
+        // Keep channels alive setting
+        CheckBox {
+            text: tr-keep-channels-alive;
+            checked <=> keep-channels-alive;
+            toggled => {
+                root.keep-channels-alive-changed(self.checked);
             }
         }
 

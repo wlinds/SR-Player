@@ -208,6 +208,25 @@ impl AppState {
             .unwrap_or_default()
     }
 
+    /// Get whether background channel streaming is enabled
+    pub fn get_keep_channels_alive(&self) -> bool {
+        self.settings
+            .lock()
+            .ok()
+            .map(|s| s.keep_channels_alive)
+            .unwrap_or(true)
+    }
+
+    /// Set whether background channel streaming is enabled
+    pub fn set_keep_channels_alive(&self, enabled: bool) {
+        if let Ok(mut settings) = self.settings.lock() {
+            settings.keep_channels_alive = enabled;
+            if let Err(e) = settings.save() {
+                eprintln!("Failed to save settings: {}", e);
+            }
+        }
+    }
+
     /// Spawn an async task on the runtime
     pub fn spawn<F>(&self, future: F)
     where
