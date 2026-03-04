@@ -62,6 +62,9 @@ pub fn update_all_translations(ui: &MainWindow, language: crate::localization::L
     );
     ui.set_tr_preferences(crate::translations::translate("Preferences...", language).into());
     ui.set_tr_about(crate::translations::translate("About SR Player", language).into());
+    ui.set_tr_check_updates(
+        crate::translations::translate("Check for Updates...", language).into(),
+    );
 
     // Update tab labels (Settings removed - now in status bar)
     use slint::{ModelRc, VecModel};
@@ -1056,6 +1059,40 @@ fn setup_misc_callbacks(ui: &MainWindow, app_state: &AppState) {
                     state_inner.channel_pool.stop_all().await;
                 });
             }
+        });
+    }
+
+    // Check for updates
+    {
+        let ui_weak = ui.as_weak();
+        let state = app_state.clone();
+
+        ui.on_check_for_updates(move || {
+            let ui_weak = ui_weak.clone();
+            let language = state.get_language();
+
+            std::thread::spawn(move || {
+                let message = match crate::core::api::check_for_update() {
+                    Ok(result) => {
+                        if result.update_available {
+                            crate::translations::translate("Update available", language)
+                                .replace("{version}", &result.latest_version)
+                        } else {
+                            crate::translations::translate("Up to date", language)
+                                .replace("{version}", &result.current_version)
+                        }
+                    }
+                    Err(_) => crate::translations::translate("Update check failed", language),
+                };
+
+                slint::invoke_from_event_loop(move || {
+                    if let Some(ui) = ui_weak.upgrade() {
+                        ui.set_update_message(message.into());
+                        ui.set_show_update_dialog(true);
+                    }
+                })
+                .ok();
+            });
         });
     }
 

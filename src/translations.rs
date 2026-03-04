@@ -47,6 +47,10 @@ fn translate_en(key: &str) -> String {
         "Keep channels alive (fast switching)" => "Keep channels alive (fast switching)",
         "Preferences..." => "Preferences...",
         "About SR Player" => "About SR Player",
+        "Check for Updates..." => "Check for Updates...",
+        "Up to date" => "You are up to date! (v{version})",
+        "Update available" => "A new version is available: v{version}",
+        "Update check failed" => "Could not check for updates",
         _ => key, // Return key if not found
     }
     .to_string()
@@ -85,8 +89,13 @@ fn translate_sv(key: &str) -> String {
         "Keep channels alive (fast switching)" => "Håll kanaler aktiva (snabbt byte)",
         "Preferences..." => "Inställningar...",
         "About SR Player" => "Om SR Player",
+        "Check for Updates..." => "Sök efter uppdateringar...",
+        "Up to date" => "Du har senaste versionen! (v{version})",
+        "Update available" => "En ny version finns tillgänglig: v{version}",
+        "Update check failed" => "Kunde inte söka efter uppdateringar",
         _ => key, // Return key if not found
-    }.to_string()
+    }
+    .to_string()
 }
 
 fn translate_ar(key: &str) -> String {
@@ -123,6 +132,10 @@ fn translate_ar(key: &str) -> String {
         "Keep channels alive (fast switching)" => "إبقاء القنوات نشطة (تبديل سريع)",
         "Preferences..." => "التفضيلات...",
         "About SR Player" => "حول SR Player",
+        "Check for Updates..." => "التحقق من التحديثات...",
+        "Up to date" => "لديك أحدث إصدار! (v{version})",
+        "Update available" => "يتوفر إصدار جديد: v{version}",
+        "Update check failed" => "تعذر التحقق من التحديثات",
         _ => key, // Return key if not found
     }
     .to_string()

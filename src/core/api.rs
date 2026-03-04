@@ -288,3 +288,39 @@ mod tests {
         assert!(!schedule.channels.is_empty());
     }
 }
+
+// --- Update checker (GitHub Releases API) ---
+
+pub struct UpdateCheckResult {
+    pub current_version: String,
+    pub latest_version: String,
+    pub update_available: bool,
+}
+
+/// Check GitHub releases for a newer version of the app.
+pub fn check_for_update() -> Result<UpdateCheckResult> {
+    let current = env!("CARGO_PKG_VERSION");
+    let client = reqwest::blocking::Client::builder()
+        .user_agent("SR-Player")
+        .timeout(Duration::from_secs(10))
+        .build()
+        .context("Failed to create HTTP client")?;
+
+    let resp: serde_json::Value = client
+        .get("https://api.github.com/repos/wlinds/SR-Player/releases/latest")
+        .send()
+        .context("Failed to reach GitHub")?
+        .json()
+        .context("Failed to parse GitHub response")?;
+
+    let tag = resp["tag_name"]
+        .as_str()
+        .context("No tag_name in release")?;
+    let latest = tag.strip_prefix('v').unwrap_or(tag);
+
+    Ok(UpdateCheckResult {
+        update_available: latest != current,
+        current_version: current.to_string(),
+        latest_version: latest.to_string(),
+    })
+}

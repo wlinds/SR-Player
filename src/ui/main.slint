@@ -71,6 +71,12 @@ export component MainWindow inherits Window {
                     show-about = !show-about;
                 }
             }
+            MenuItem {
+                title: root.tr-check-updates;
+                activated => {
+                    check-for-updates();
+                }
+            }
         }
     }
 
@@ -180,6 +186,7 @@ export component MainWindow inherits Window {
     in-out property <string> tr-keep-channels-alive: "Keep channels alive (fast switching)";
     in-out property <string> tr-preferences: "Preferences...";
     in-out property <string> tr-about: "About SR Player";
+    in-out property <string> tr-check-updates: "Check for Updates...";
 
     // Settings state
     in-out property <bool> keep-channels-alive: true;
@@ -197,6 +204,9 @@ export component MainWindow inherits Window {
     in-out property <bool> show-settings: false;
     // About overlay state
     in-out property <bool> show-about: false;
+    // Update dialog state
+    in-out property <bool> show-update-dialog: false;
+    in-out property <string> update-message: "";
 
     // ================================================================
     // CALLBACKS (Event Handlers)
@@ -242,6 +252,9 @@ export component MainWindow inherits Window {
     // Settings
     callback language-changed(string);  // (language_code)
     callback keep-channels-alive-changed(bool);
+
+    // Update check
+    callback check-for-updates();
 
     // Auto-play callback
     callback episode-finished();  // Called when an episode reaches the end
@@ -974,7 +987,7 @@ export component MainWindow inherits Window {
                 }
 
                 Text {
-                    text: "Version 0.7.0";
+                    text: "Version 0.7.1";
                     font-size: 13px;
                     color: #aaaaaa;
                     horizontal-alignment: center;
@@ -992,6 +1005,56 @@ export component MainWindow inherits Window {
                     font-size: 11px;
                     color: #666666;
                     horizontal-alignment: center;
+                }
+            }
+        }
+    }
+
+    // ================================================================
+    // UPDATE DIALOG OVERLAY
+    // ================================================================
+    if show-update-dialog: Rectangle {
+        width: 100%;
+        height: 100%;
+        background: #00000080;
+
+        TouchArea {
+            clicked => {
+                show-update-dialog = false;
+            }
+        }
+
+        Rectangle {
+            width: min(280px, parent.width - 40px);
+            height: min(140px, parent.height - 40px);
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            background: #2a2a2a;
+            border-radius: 8px;
+
+            TouchArea {
+                // Prevent clicks from closing dialog
+            }
+
+            VerticalBox {
+                padding: 24px;
+                spacing: 12px;
+                alignment: center;
+
+                Text {
+                    text: root.tr-check-updates;
+                    font-size: 16px;
+                    font-weight: 700;
+                    color: #ffffff;
+                    horizontal-alignment: center;
+                }
+
+                Text {
+                    text: root.update-message;
+                    font-size: 13px;
+                    color: #aaaaaa;
+                    horizontal-alignment: center;
+                    wrap: word-wrap;
                 }
             }
         }
