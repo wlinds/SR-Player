@@ -32,4 +32,5 @@ pub mod gapless_streaming;
 pub mod models;
 pub mod podcast;
 pub mod seek_handler;
+pub mod settings;
 pub mod utils;

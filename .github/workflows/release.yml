@@ -362,3 +362,16 @@ jobs:
           **/sr-player-${{ github.ref_name }}-setup.msi
         draft: false
         prerelease: false
+
+  update-website:
+    name: Update Website Version
+    needs: create-release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger website update
+        uses: peter-evans/repository-dispatch@v3
+        with:
+          token: ${{ secrets.WEBSITE_REPO_PAT }}
+          repository: wlinds/React-Vite-Web-Template-2024
+          event-type: update-version
+          client-payload: '{"version": "${{ github.ref_name }}"}'

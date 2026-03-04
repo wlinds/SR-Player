@@ -27,9 +27,10 @@ import { ChannelItem, ProgramInfo, ProgramItem, EpisodeItem } from "types.slint"
 import { NowPlaying } from "now_playing.slint";
 import { TabContent } from "tab_content.slint";
 import { TabBar, TabItem } from "tab_bar.slint";
+import { Settings } from "settings.slint";
 
 // Re-export types so they're available to Rust code
-export { ChannelItem, ProgramInfo, ProgramItem, EpisodeItem }
+export { ChannelItem, ProgramInfo, ProgramItem, EpisodeItem, TabItem }
 
 // Main application window component
 // Like <App> component in React or main() window in Tkinter
@@ -48,6 +49,30 @@ export component MainWindow inherits Window {
     background: #1a1a1a;
     // Use Segoe UI on Windows for consistent font rendering and symbol support
     default-font-family: "Segoe UI";
+
+    // ================================================================
+    // NATIVE MENU BAR (macOS/Linux/Windows)
+    // ================================================================
+    // Note: On macOS, the system automatically creates the first menu (app menu)
+    // with About, Services, Hide, Quit, etc. We add additional menus after it.
+    MenuBar {
+        // Settings menu (appears after the system app menu on macOS)
+        Menu {
+            title: root.tr-settings;
+            MenuItem {
+                title: root.tr-preferences;
+                activated => {
+                    show-settings = !show-settings;
+                }
+            }
+            MenuItem {
+                title: root.tr-about;
+                activated => {
+                    show-about = !show-about;
+                }
+            }
+        }
+    }
 
     // ================================================================
     // TIMER FOR PROGRESS UPDATES
@@ -92,6 +117,7 @@ export component MainWindow inherits Window {
     in-out property <float> program-duration: 0.0;      // Total duration in seconds (live radio programs)
     in-out property <string> download-status: "";       // Download status message
     in-out property <string> clipboard-status: "";      // Clipboard copy status message
+    in-out property <string> connection-status: "";     // Connection status message
     in-out property <float> buffer-depth: 0.0;          // DVR buffer depth in seconds
     in-out property <bool> is-live: true;               // True if at live edge, false if time-shifted
     in-out property <ProgramInfo> current-program: {
@@ -104,7 +130,7 @@ export component MainWindow inherits Window {
         has-podcasts: false
     };
 
-    // Tab management (0=Live, 1=Podcasts, 2=News, 3=Music, 4=Favorites)
+    // Tab management (0=Live, 1=Podcasts, 2=News, 3=Music, 4=Favorites, 5=Settings)
     in-out property <int> current-tab: 0;
 
     // Data arrays for different tabs
@@ -124,6 +150,53 @@ export component MainWindow inherits Window {
     in-out property <bool> show-episodes-view: false;
     in-out property <bool> programs-loaded: false;
     in-out property <bool> news-loaded: false;
+
+    // ================================================================
+    // TRANSLATION STRINGS (managed from Rust for runtime language switching)
+    // ================================================================
+    in-out property <int> selected-language-index: 1; // 0=English, 1=Swedish, 2=Arabic
+
+    in-out property <string> tr-live: "Live";
+    in-out property <string> tr-podcasts: "Podcasts";
+    in-out property <string> tr-news: "News";
+    in-out property <string> tr-music: "Music";
+    in-out property <string> tr-favorites: "Favorites";
+    in-out property <string> tr-settings: "Settings";
+    in-out property <string> tr-vol: "Vol:";
+    in-out property <string> tr-live-indicator: "LIVE";
+    in-out property <string> tr-language-label: "Language:";
+    in-out property <string> tr-browse-podcasts: "Browse Podcasts";
+    in-out property <string> tr-back: "← Back";
+    in-out property <string> tr-loading-channels: "Loading channels...";
+    in-out property <string> tr-loading-programs: "Loading programs...";
+    in-out property <string> tr-loading-news: "Loading news programs...";
+    in-out property <string> tr-no-channels: "No channels found";
+    in-out property <string> tr-no-programs: "No programs found";
+    in-out property <string> tr-no-episodes: "No episodes found";
+    in-out property <string> tr-no-news: "No news programs found";
+    in-out property <string> tr-no-favorites: "No favorites yet. Click the star icon on channels or podcasts to add them.";
+    in-out property <string> tr-search-podcasts: "Search podcasts...";
+    in-out property <string> tr-music-coming-soon: "Music content coming soon...";
+    in-out property <string> tr-keep-channels-alive: "Keep channels alive (fast switching)";
+    in-out property <string> tr-preferences: "Preferences...";
+    in-out property <string> tr-about: "About SR Player";
+
+    // Settings state
+    in-out property <bool> keep-channels-alive: true;
+
+    // Tab labels (populated from Rust with translated strings)
+    in-out property <[TabItem]> tabs: [
+        { id: 0, label: "Live" },
+        { id: 1, label: "Podcasts" },
+        { id: 2, label: "News" },
+        { id: 3, label: "Music" },
+        { id: 4, label: "Favorites" }
+    ];
+
+    // Settings overlay state
+    in-out property <bool> show-settings: false;
+    // About overlay state
+    in-out property <bool> show-about: false;
 
     // ================================================================
     // CALLBACKS (Event Handlers)
@@ -165,6 +238,10 @@ export component MainWindow inherits Window {
 
     // Share callback
     callback share-clicked(string);  // (episode_url)
+
+    // Settings
+    callback language-changed(string);  // (language_code)
+    callback keep-channels-alive-changed(bool);
 
     // Auto-play callback
     callback episode-finished();  // Called when an episode reaches the end
@@ -405,6 +482,21 @@ export component MainWindow inherits Window {
                         font-size: 10px;
                     }
                 }
+
+                // Connection status (connecting/failed)
+                if connection-status != "": HorizontalBox {
+                    padding-left: 8px;
+                    padding-right: 8px;
+                    padding-top: 0px;
+                    padding-bottom: 2px;
+                    alignment: center;
+
+                    Text {
+                        text: connection-status;
+                        color: #EFA669;
+                        font-size: 10px;
+                    }
+                }
             }
 
             // Playback controls and volume
@@ -446,7 +538,7 @@ export component MainWindow inherits Window {
 
                     // Volume label
                     Text {
-                        text: "Vol:";
+                        text: root.tr-vol;
                         color: #666666;
                         vertical-alignment: center;
                         font-size: 14px;
@@ -513,7 +605,7 @@ export component MainWindow inherits Window {
                 padding-right: 8px;
 
                 Button {
-                    text: "Browse Podcasts";
+                    text: root.tr-browse-podcasts;
                     clicked => {
                         browse-podcasts-clicked(current-program.program-id);
                     }
@@ -531,6 +623,9 @@ export component MainWindow inherits Window {
 
             TabBar {
                 current-tab <=> root.current-tab;  // Two-way binding
+
+                // Pass tabs array with translated labels
+                tabs: root.tabs;
 
                 tab-clicked(tab-id) => {
                     // Handle special logic for specific tabs
@@ -557,11 +652,12 @@ export component MainWindow inherits Window {
 
             // Live Tab - Channel list
             if current-tab == 0: TabContent {
+                tr-back: root.tr-back;
             is-channels-tab: true;
             channels: root.channels;
             is-loaded: true;
-            loading-text: "Loading channels...";
-            empty-text: "No channels found";
+            loading-text: root.tr-loading-channels;
+            empty-text: root.tr-no-channels;
             show-favorite-buttons: true;
 
             channel-selected(id, url) => {
@@ -617,7 +713,7 @@ export component MainWindow inherits Window {
 
                             // Placeholder text (shown when input is empty)
                             if root.podcast-search-query == "": Text {
-                                text: "Search podcasts...";
+                                text: root.tr-search-podcasts;
                                 font-size: 14px;
                                 color: #666666;
                                 vertical-alignment: center;
@@ -628,6 +724,7 @@ export component MainWindow inherits Window {
             }
 
             TabContent {
+                tr-back: root.tr-back;
                 vertical-stretch: 1;
 
                 // Switch between programs list and episodes view
@@ -641,8 +738,8 @@ export component MainWindow inherits Window {
                 programs: root.programs;
                 episodes: root.episodes;
                 is-loaded: programs-loaded;
-                loading-text: "Loading programs...";
-                empty-text: show-episodes-view ? "No episodes found" : "No programs found";
+                loading-text: root.tr-loading-programs;
+                empty-text: show-episodes-view ? root.tr-no-episodes : root.tr-no-programs;
                 show-favorite-buttons: true;
 
                 program-selected(id) => {
@@ -669,6 +766,7 @@ export component MainWindow inherits Window {
 
         // News Tab - News programs with groups (same structure as Podcasts)
         if current-tab == 2: TabContent {
+                tr-back: root.tr-back;
             // Switch between programs list and episodes view
             show-back-button: show-episodes-view;
             selected-program-name: root.selected-program-name;
@@ -680,8 +778,8 @@ export component MainWindow inherits Window {
             programs: root.news-programs;
             episodes: root.episodes;
             is-loaded: news-loaded;
-            loading-text: "Loading news programs...";
-            empty-text: show-episodes-view ? "No episodes found" : "No news programs found";
+            loading-text: root.tr-loading-news;
+            empty-text: show-episodes-view ? root.tr-no-episodes : root.tr-no-news;
 
             program-selected(id) => {
                 root.program-selected(id);
@@ -702,8 +800,9 @@ export component MainWindow inherits Window {
 
         // Music Tab - Placeholder using TabContent
         if current-tab == 3: TabContent {
+                tr-back: root.tr-back;
             show-simple-text: true;
-            simple-text: "Music content coming soon...";
+            simple-text: root.tr-music-coming-soon;
             simple-text-color: #888888;
             is-loaded: true;
         }
@@ -714,6 +813,7 @@ export component MainWindow inherits Window {
 
             // Show channels if any
             if favorite-channels.length > 0: TabContent {
+                tr-back: root.tr-back;
                 is-channels-tab: true;
                 channels: root.favorite-channels;
                 is-loaded: true;
@@ -731,6 +831,7 @@ export component MainWindow inherits Window {
 
             // Show programs or episodes (depending on show-episodes-view state)
             if favorite-programs.length > 0 || show-episodes-view: TabContent {
+                tr-back: root.tr-back;
                 // Switch between programs list and episodes view
                 show-back-button: show-episodes-view;
                 selected-program-name: root.selected-program-name;
@@ -742,7 +843,7 @@ export component MainWindow inherits Window {
                 programs: root.favorite-programs;
                 episodes: root.episodes;
                 is-loaded: true;
-                empty-text: show-episodes-view ? "No episodes found" : "";
+                empty-text: show-episodes-view ? root.tr-no-episodes : "";
                 show-favorite-buttons: !show-episodes-view;
 
                 program-selected(id) => {
@@ -764,14 +865,136 @@ export component MainWindow inherits Window {
 
             // Empty state when no favorites
             if favorite-channels.length == 0 && favorite-programs.length == 0: Text {
-                text: "No favorites yet. Click the star icon on channels or podcasts to add them.";
+                text: root.tr-no-favorites;
                 font-size: 14px;
                 color: #888888;
                 horizontal-alignment: center;
                 vertical-alignment: center;
             }
         }
+
         } // end tab navigation VerticalBox
     } // end main VerticalBox
+
+    // ================================================================
+    // SETTINGS OVERLAY
+    // ================================================================
+    if show-settings: Rectangle {
+        width: 100%;
+        height: 100%;
+        background: #00000080;  // Semi-transparent black overlay
+
+        TouchArea {
+            // Close settings when clicking outside
+            clicked => {
+                show-settings = false;
+            }
+        }
+
+        // Settings panel
+        Rectangle {
+            width: min(300px, parent.width - 40px);
+            height: min(250px, parent.height - 40px);
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            background: #2a2a2a;
+            border-radius: 8px;
+
+            TouchArea {
+                // Prevent clicks from closing settings
+            }
+
+            Settings {
+                // Pass translation properties
+                tr-settings: root.tr-settings;
+                tr-language-label: root.tr-language-label;
+                tr-live: root.tr-live;
+                tr-podcasts: root.tr-podcasts;
+                tr-keep-channels-alive: root.tr-keep-channels-alive;
+
+                // Bind settings state
+                selected-language-index <=> root.selected-language-index;
+                keep-channels-alive <=> root.keep-channels-alive;
+
+                language-changed(code) => {
+                    root.language-changed(code);
+                }
+
+                keep-channels-alive-changed(enabled) => {
+                    root.keep-channels-alive-changed(enabled);
+                }
+            }
+        }
+    }
+
+    // ================================================================
+    // ABOUT OVERLAY
+    // ================================================================
+    if show-about: Rectangle {
+        width: 100%;
+        height: 100%;
+        background: #00000080;
+
+        TouchArea {
+            clicked => {
+                show-about = false;
+            }
+        }
+
+        Rectangle {
+            width: min(280px, parent.width - 40px);
+            height: min(220px, parent.height - 40px);
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            background: #2a2a2a;
+            border-radius: 8px;
+
+            TouchArea {
+                // Prevent clicks from closing about
+            }
+
+            VerticalBox {
+                padding: 24px;
+                spacing: 12px;
+                alignment: center;
+
+                Image {
+                    source: @image-url("../assets/icons/icon.png");
+                    width: 64px;
+                    height: 64px;
+                    horizontal-alignment: center;
+                }
+
+                Text {
+                    text: "SR Player";
+                    font-size: 20px;
+                    font-weight: 700;
+                    color: #ffffff;
+                    horizontal-alignment: center;
+                }
+
+                Text {
+                    text: "Version 0.7.0";
+                    font-size: 13px;
+                    color: #aaaaaa;
+                    horizontal-alignment: center;
+                }
+
+                Text {
+                    text: "Sveriges Radio streaming player\nwith gapless playback";
+                    font-size: 12px;
+                    color: #888888;
+                    horizontal-alignment: center;
+                }
+
+                Text {
+                    text: "\u{00A9} 2025 SR Player Contributors";
+                    font-size: 11px;
+                    color: #666666;
+                    horizontal-alignment: center;
+                }
+            }
+        }
+    }
     } // end FocusScope
 }

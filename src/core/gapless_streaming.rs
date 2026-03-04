@@ -322,41 +322,25 @@ impl GaplessPlayer {
         let stats = self.stats.clone();
         let live_buffer = self.live_buffer.clone();
         let buffer_start_time = self.buffer_start_time.clone();
+        let sink = self.sink.clone();
 
         tokio::spawn(async move {
             if gen_check.load(Ordering::SeqCst) != generation {
                 return;
             }
 
-            let Some((mut response, is_finite)) = Self::connect_with_retry(&client, &url).await
+            let Some((response, is_finite)) = Self::connect_with_retry(&client, &url).await
             else {
                 return;
             };
 
-            // Buffer initial data
-            let mut bytes_downloaded = 0;
-            let mut initial_buffer = Vec::new();
-            while initial_buffer.len() < 2048 {
-                match response.chunk().await {
-                    Ok(Some(chunk)) => {
-                        bytes_downloaded += chunk.len();
-                        initial_buffer.extend_from_slice(&chunk);
-                    }
-                    _ => {
-                        let Some((new_resp, _)) = Self::connect_with_retry(&client, &url).await
-                        else {
-                            return;
-                        };
-                        response = new_resp;
-                    }
-                }
-            }
-
-            if gen_check.load(Ordering::SeqCst) != generation
-                || data_tx.send(Bytes::from(initial_buffer)).is_err()
-            {
+            // Buffer initial data and start streaming with a fresh decoder channel
+            let Some((mut response, mut data_tx, mut bytes_downloaded)) =
+                Self::buffer_initial_data(response, &client, &url, generation, &gen_check, data_tx)
+                    .await
+            else {
                 return;
-            }
+            };
 
             let mut reconnect_count = 0;
             loop {
@@ -396,12 +380,113 @@ impl GaplessPlayer {
                         else {
                             break;
                         };
-                        response = new_resp;
+
+                        // On reconnect, create a fresh data channel and decoder.
+                        // The old decoder's state won't match the new stream's AAC frames,
+                        // causing decode errors and audio glitches if we reuse it.
+                        info!("Reconnected, resetting decoder for clean stream");
+                        let (new_data_tx, new_data_rx) = crossbeam_channel::unbounded::<Bytes>();
+
+                        let Some((buffered_resp, fresh_tx, fresh_bytes)) =
+                            Self::buffer_initial_data(
+                                new_resp,
+                                &client,
+                                &url,
+                                generation,
+                                &gen_check,
+                                new_data_tx,
+                            )
+                            .await
+                        else {
+                            break;
+                        };
+
+                        // Spawn new decoder task with fresh channel
+                        let new_gen_check = gen_check.clone();
+                        let new_sink = sink.clone();
+                        tokio::task::spawn_blocking(move || {
+                            if new_gen_check.load(Ordering::SeqCst) != generation {
+                                return;
+                            }
+
+                            let first_chunk = loop {
+                                match new_data_rx.recv_timeout(Duration::from_secs(10)) {
+                                    Ok(chunk) => break chunk,
+                                    Err(_) if new_gen_check.load(Ordering::SeqCst) != generation => return,
+                                    Err(_) => continue,
+                                }
+                            };
+
+                            let mut media_source = Box::new(ChannelMediaSource::new(new_data_rx));
+                            media_source.current_chunk = Some(first_chunk);
+
+                            let symphonia_source = match SymphoniaSource::new(media_source) {
+                                Ok(source) => source,
+                                Err(e) => {
+                                    error!("Failed to create Symphonia source after reconnect: {}", e);
+                                    return;
+                                }
+                            };
+
+                            let sink_guard =
+                                tokio::runtime::Handle::current().block_on(new_sink.lock());
+                            // Clear stale audio from the old decoder before appending.
+                            // Without this, the sink queues old buffered audio before
+                            // the new live source, causing playback to "jump back".
+                            sink_guard.clear();
+                            sink_guard.append(symphonia_source);
+                            sink_guard.play();
+                            info!("Playback resumed after reconnect");
+                        });
+
+                        response = buffered_resp;
+                        data_tx = fresh_tx;
+                        bytes_downloaded = fresh_bytes;
                         reconnect_count = 0;
                     }
                 }
             }
         })
+    }
+
+    /// Buffer initial data from a response, handling reconnects during buffering.
+    /// Returns the response (possibly reconnected), the data sender, and bytes downloaded.
+    async fn buffer_initial_data(
+        mut response: reqwest::Response,
+        client: &reqwest::Client,
+        url: &str,
+        generation: u64,
+        gen_check: &Arc<AtomicU64>,
+        data_tx: crossbeam_channel::Sender<Bytes>,
+    ) -> Option<(reqwest::Response, crossbeam_channel::Sender<Bytes>, usize)> {
+        let mut bytes_downloaded = 0;
+        let mut initial_buffer = Vec::new();
+        while initial_buffer.len() < 2048 {
+            match response.chunk().await {
+                Ok(Some(chunk)) => {
+                    bytes_downloaded += chunk.len();
+                    initial_buffer.extend_from_slice(&chunk);
+                }
+                _ => {
+                    let (new_resp, _) = Self::connect_with_retry(client, url).await?;
+                    response = new_resp;
+                    // Reset buffer on reconnect during initial buffering -- partial data
+                    // from the old connection won't form valid AAC frames with new data
+                    initial_buffer.clear();
+                    bytes_downloaded = 0;
+                }
+            }
+        }
+
+        if gen_check.load(Ordering::SeqCst) != generation {
+            return None;
+        }
+
+        if data_tx.send(Bytes::from(initial_buffer)).is_err() {
+            return None;
+        }
+
+        Some((response, data_tx, bytes_downloaded))
     }
 
     async fn connect_with_retry(
@@ -447,7 +532,7 @@ impl GaplessPlayer {
                 return Ok(());
             }
 
-            match tokio::time::timeout(Duration::from_secs(3), response.chunk()).await {
+            match tokio::time::timeout(Duration::from_secs(10), response.chunk()).await {
                 Ok(Ok(Some(chunk))) => {
                     *bytes_downloaded += chunk.len();
                     if let Ok(mut s) = stats.try_lock() {
@@ -458,8 +543,11 @@ impl GaplessPlayer {
                         s.bitrate_kbps = s.download_speed_kbps;
                     }
                     live_buffer.push(chunk.clone()).await;
-                    if buffer_start_time.lock().await.is_none() {
-                        *buffer_start_time.lock().await = Some(Instant::now());
+                    {
+                        let mut bst = buffer_start_time.lock().await;
+                        if bst.is_none() {
+                            *bst = Some(Instant::now());
+                        }
                     }
                     if data_tx.send(chunk).is_err() {
                         return Ok(());

@@ -10,6 +10,8 @@ use crate::core::favorites::Favorites;
 use crate::core::file_player_send_safe::SendSafeFilePlayer;
 use crate::core::gapless_send_safe::SendSafeGaplessPlayer;
 use crate::core::models::{ActivePlayer, Program};
+use crate::core::settings::Settings;
+use crate::localization::Language;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use tokio::runtime::Handle;
@@ -39,6 +41,9 @@ pub struct AppState {
     // Favorites
     pub favorites: Arc<Mutex<Favorites>>,
 
+    // Settings
+    pub settings: Arc<Mutex<Settings>>,
+
     // Runtime handle for spawning async tasks
     pub runtime: Handle,
 }
@@ -51,6 +56,7 @@ impl AppState {
         file_player: Arc<SendSafeFilePlayer>,
         episode_cache: EpisodeCache,
         favorites: Favorites,
+        settings: Settings,
         runtime: Handle,
     ) -> Self {
         Self {
@@ -66,6 +72,7 @@ impl AppState {
             all_programs: Arc::new(Mutex::new(Vec::new())),
             groups_expanded: Arc::new(Mutex::new(HashMap::new())),
             favorites: Arc::new(Mutex::new(favorites)),
+            settings: Arc::new(Mutex::new(settings)),
             runtime,
         }
     }
@@ -178,6 +185,46 @@ impl AppState {
             .ok()
             .map(|eps| eps.len())
             .unwrap_or(0)
+    }
+
+    /// Change language and reload translations
+    pub fn set_language(&self, language: Language) {
+        if let Ok(mut settings) = self.settings.lock() {
+            settings.language = language;
+            if let Err(e) = settings.save() {
+                eprintln!("Failed to save settings: {}", e);
+            }
+        }
+
+        // Translations are bundled at compile time - no runtime reloading needed
+    }
+
+    /// Get current language
+    pub fn get_language(&self) -> Language {
+        self.settings
+            .lock()
+            .ok()
+            .map(|s| s.language)
+            .unwrap_or_default()
+    }
+
+    /// Get whether background channel streaming is enabled
+    pub fn get_keep_channels_alive(&self) -> bool {
+        self.settings
+            .lock()
+            .ok()
+            .map(|s| s.keep_channels_alive)
+            .unwrap_or(true)
+    }
+
+    /// Set whether background channel streaming is enabled
+    pub fn set_keep_channels_alive(&self, enabled: bool) {
+        if let Ok(mut settings) = self.settings.lock() {
+            settings.keep_channels_alive = enabled;
+            if let Err(e) = settings.save() {
+                eprintln!("Failed to save settings: {}", e);
+            }
+        }
     }
 
     /// Spawn an async task on the runtime

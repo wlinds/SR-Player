@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleDevelopmentRegion</key>
+    <string>en</string>
+    <key>CFBundleDisplayName</key>
+    <string>SR Player</string>
+    <key>CFBundleExecutable</key>
+    <string>sr-player</string>
+    <key>CFBundleIdentifier</key>
+    <string>com.srplayer.app</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+    <key>CFBundleName</key>
+    <string>SR Player</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleShortVersionString</key>
+    <string>0.6.3</string>
+    <key>CFBundleVersion</key>
+    <string>0.6.3</string>
+    <key>NSHumanReadableCopyright</key>
+    <string>© 2025 SR Player Contributors. Licensed under MPL-2.0.</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>10.13</string>
+    <key>CFBundleIconFile</key>
+    <string>icon.icns</string>
+    <key>NSHighResolutionCapable</key>
+    <true/>
+    <key>LSApplicationCategoryType</key>
+    <string>public.app-category.music</string>
+    <key>CFBundleDocumentTypes</key>
+    <array/>
+</dict>
+</plist>

@@ -21,6 +21,8 @@
 mod app_state;
 mod callbacks;
 mod core;
+mod localization;
+mod translations;
 
 // Use statements
 use app_state::AppState;
@@ -30,6 +32,7 @@ use core::episode_cache::EpisodeCache;
 use core::favorites::Favorites;
 use core::file_player_send_safe::SendSafeFilePlayer;
 use core::gapless_send_safe::SendSafeGaplessPlayer;
+use core::settings::Settings;
 
 use slint::{Model, ModelRc, VecModel};
 use std::collections::HashMap;
@@ -39,8 +42,63 @@ use std::sync::Arc;
 // Include Slint UI
 slint::include_modules!();
 
+/// Set the macOS process name displayed in the menu bar.
+/// When running via `cargo run`, macOS uses the binary name ("sr-player").
+/// This overrides it to show "SR Player" instead.
+#[cfg(target_os = "macos")]
+fn set_macos_app_name() {
+    use std::ffi::{c_char, c_void, CString};
+
+    type Id = *mut c_void;
+    type Sel = *mut c_void;
+
+    // Non-variadic function pointer types for objc_msgSend casts.
+    // On ARM64, objc_msgSend uses register-based calling conventions that
+    // differ from C variadic ABI, so we must cast to exact signatures.
+    type MsgSendNoArgs = unsafe extern "C" fn(Id, Sel) -> Id;
+    type MsgSendOnePtr = unsafe extern "C" fn(Id, Sel, *const c_char) -> Id;
+    type MsgSendSetObj = unsafe extern "C" fn(Id, Sel, Id);
+
+    extern "C" {
+        fn objc_getClass(name: *const c_char) -> Id;
+        fn sel_registerName(name: *const c_char) -> Sel;
+        fn objc_msgSend();
+    }
+
+    unsafe {
+        let send_no_args: MsgSendNoArgs = std::mem::transmute(objc_msgSend as *const c_void);
+        let send_one_ptr: MsgSendOnePtr = std::mem::transmute(objc_msgSend as *const c_void);
+        let send_set_obj: MsgSendSetObj = std::mem::transmute(objc_msgSend as *const c_void);
+
+        let cls = objc_getClass(c"NSProcessInfo".as_ptr());
+        if cls.is_null() { return; }
+
+        let process_info_sel = sel_registerName(c"processInfo".as_ptr());
+        let process_info = send_no_args(cls, process_info_sel);
+        if process_info.is_null() { return; }
+
+        // Create NSString with "SR Player"
+        let nsstring_cls = objc_getClass(c"NSString".as_ptr());
+        let alloc_sel = sel_registerName(c"alloc".as_ptr());
+        let init_sel = sel_registerName(c"initWithUTF8String:".as_ptr());
+        let name_cstr = CString::new("SR Player").unwrap();
+
+        let nsstring = send_no_args(nsstring_cls, alloc_sel);
+        let nsstring = send_one_ptr(nsstring, init_sel, name_cstr.as_ptr());
+
+        // Set the process name
+        let set_name_sel = sel_registerName(c"setProcessName:".as_ptr());
+        send_set_obj(process_info, set_name_sel, nsstring);
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn set_macos_app_name() {
+    // No-op on other platforms
+}
+
 // ============================================================================
-// HELPER FUNCTIONS
+// DATA INITIALIZATION
 // ============================================================================
 
 /// Initialize channels from API and return both channel map and UI model
@@ -76,6 +134,9 @@ fn initialize_channels(
 // ============================================================================
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Set macOS process name before anything else
+    set_macos_app_name();
+
     // Initialize logger
     env_logger::Builder::from_default_env()
         .filter_level(log::LevelFilter::Info)
@@ -106,8 +167,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let file_player = Arc::new(SendSafeFilePlayer::new()?);
     let episode_cache = EpisodeCache::new();
     let favorites = Favorites::load();
+    let settings = Settings::load();
 
-    println!("Favorites loaded from disk");
+    println!("Favorites and settings loaded from disk");
 
     // Bundle all shared state
     let app_state = AppState::new(
@@ -116,6 +178,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         file_player,
         episode_cache,
         favorites,
+        settings,
         runtime.handle().clone(),
     );
 
@@ -123,6 +186,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     runtime.block_on(async {
         app_state.set_volume(0.25).await;
     });
+
+    // Set initial language from saved settings
+    let saved_language = app_state.get_language();
+
+    // Update all translation properties in the UI
+    callbacks::update_all_translations(&ui, saved_language);
+
+    // Set the language index in the Settings dropdown to match saved language
+    let language_index = match saved_language {
+        localization::Language::English => 0,
+        localization::Language::Swedish => 1,
+        localization::Language::Arabic => 2,
+    };
+    ui.set_selected_language_index(language_index);
+
+    // Set initial keep-channels-alive from saved settings
+    ui.set_keep_channels_alive(app_state.get_keep_channels_alive());
 
     println!("Backend components initialized");
 

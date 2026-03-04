@@ -15,7 +15,7 @@ export struct TabItem {
     label: string,     // Tab display text ("Live", "Podcasts", etc.)
 }
 
-// TabBar component that generates tabs from a list
+// TabBar component that generates tabs from a list with runtime translation
 export component TabBar inherits Rectangle {
     // ================================================================
     // PROPERTIES
@@ -24,13 +24,14 @@ export component TabBar inherits Rectangle {
     // Current active tab index
     in-out property <int> current-tab: 0;
 
-    // List of tabs to display
+    // List of tabs to display (labels are translated at runtime)
     in property <[TabItem]> tabs: [
         { id: 0, label: "Live" },
         { id: 1, label: "Podcasts" },
         { id: 2, label: "News" },
         { id: 3, label: "Music" },
-        { id: 4, label: "Favorites" }
+        { id: 4, label: "Favorites" },
+        { id: 5, label: "Settings" }
     ];
 
     // Visual properties
