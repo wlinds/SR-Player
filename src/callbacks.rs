@@ -432,7 +432,7 @@ fn setup_tab_callbacks(ui: &MainWindow, app_state: &AppState, api_client: &SrApi
                 .all_programs
                 .lock()
                 .ok()
-                .map_or(false, |p| !p.is_empty());
+                .is_some_and(|p| !p.is_empty());
 
             if has_cached {
                 let Ok(programs) = state.all_programs.lock() else {
@@ -484,7 +484,7 @@ fn setup_tab_callbacks(ui: &MainWindow, app_state: &AppState, api_client: &SrApi
                 .all_programs
                 .lock()
                 .ok()
-                .map_or(false, |p| !p.is_empty());
+                .is_some_and(|p| !p.is_empty());
 
             if has_cached {
                 let Ok(programs) = state.all_programs.lock() else {
