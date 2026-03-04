@@ -329,8 +329,7 @@ impl GaplessPlayer {
                 return;
             }
 
-            let Some((response, is_finite)) = Self::connect_with_retry(&client, &url).await
-            else {
+            let Some((response, is_finite)) = Self::connect_with_retry(&client, &url).await else {
                 return;
             };
 
@@ -412,7 +411,11 @@ impl GaplessPlayer {
                             let first_chunk = loop {
                                 match new_data_rx.recv_timeout(Duration::from_secs(10)) {
                                     Ok(chunk) => break chunk,
-                                    Err(_) if new_gen_check.load(Ordering::SeqCst) != generation => return,
+                                    Err(_)
+                                        if new_gen_check.load(Ordering::SeqCst) != generation =>
+                                    {
+                                        return
+                                    }
                                     Err(_) => continue,
                                 }
                             };
@@ -423,7 +426,10 @@ impl GaplessPlayer {
                             let symphonia_source = match SymphoniaSource::new(media_source) {
                                 Ok(source) => source,
                                 Err(e) => {
-                                    error!("Failed to create Symphonia source after reconnect: {}", e);
+                                    error!(
+                                        "Failed to create Symphonia source after reconnect: {}",
+                                        e
+                                    );
                                     return;
                                 }
                             };

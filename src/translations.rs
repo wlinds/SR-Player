@@ -33,8 +33,9 @@ fn translate_en(key: &str) -> String {
         "No programs found" => "No programs found",
         "No episodes found" => "No episodes found",
         "No news programs found" => "No news programs found",
-        "No favorites yet. Click the star icon on channels or podcasts to add them." =>
-            "No favorites yet. Click the star icon on channels or podcasts to add them.",
+        "No favorites yet. Click the star icon on channels or podcasts to add them." => {
+            "No favorites yet. Click the star icon on channels or podcasts to add them."
+        }
         "Search podcasts..." => "Search podcasts...",
         "Music content coming soon..." => "Music content coming soon...",
         "Downloading" => "Downloading",
@@ -47,7 +48,8 @@ fn translate_en(key: &str) -> String {
         "Preferences..." => "Preferences...",
         "About SR Player" => "About SR Player",
         _ => key, // Return key if not found
-    }.to_string()
+    }
+    .to_string()
 }
 
 fn translate_sv(key: &str) -> String {
@@ -99,7 +101,7 @@ fn translate_ar(key: &str) -> String {
         "LIVE" => "مباشر",
         "Language:" => "اللغة:",
         "Browse Podcasts" => "تصفح البودكاست",
-        "← Back" => "→ رجوع",  // Arrow reversed for RTL
+        "← Back" => "→ رجوع", // Arrow reversed for RTL
         "Loading channels..." => "جاري تحميل القنوات...",
         "Loading programs..." => "جاري تحميل البرامج...",
         "Loading news programs..." => "جاري تحميل برامج الأخبار...",
@@ -107,8 +109,9 @@ fn translate_ar(key: &str) -> String {
         "No programs found" => "لم يتم العثور على برامج",
         "No episodes found" => "لم يتم العثور على حلقات",
         "No news programs found" => "لم يتم العثور على برامج أخبار",
-        "No favorites yet. Click the star icon on channels or podcasts to add them." =>
-            "لا توجد مفضلات بعد. انقر على أيقونة النجمة على القنوات أو البودكاست لإضافتها.",
+        "No favorites yet. Click the star icon on channels or podcasts to add them." => {
+            "لا توجد مفضلات بعد. انقر على أيقونة النجمة على القنوات أو البودكاست لإضافتها."
+        }
         "Search podcasts..." => "البحث عن بودكاست...",
         "Music content coming soon..." => "محتوى الموسيقى قريباً...",
         "Downloading" => "جاري التحميل",
@@ -121,5 +124,6 @@ fn translate_ar(key: &str) -> String {
         "Preferences..." => "التفضيلات...",
         "About SR Player" => "حول SR Player",
         _ => key, // Return key if not found
-    }.to_string()
+    }
+    .to_string()
 }

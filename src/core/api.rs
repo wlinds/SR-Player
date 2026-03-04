@@ -161,8 +161,9 @@ impl SrApiClient {
             .context("Failed to fetch channel schedule")?;
 
         // Single-channel endpoint returns {"channel": {...}} instead of {"channels": [...]}
-        let single: SingleChannelScheduleResponse =
-            response.json().context("Failed to parse channel schedule JSON")?;
+        let single: SingleChannelScheduleResponse = response
+            .json()
+            .context("Failed to parse channel schedule JSON")?;
 
         Ok(ScheduleRightNowResponse {
             copyright: single.copyright,

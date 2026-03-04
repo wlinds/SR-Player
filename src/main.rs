@@ -71,11 +71,15 @@ fn set_macos_app_name() {
         let send_set_obj: MsgSendSetObj = std::mem::transmute(objc_msgSend as *const c_void);
 
         let cls = objc_getClass(c"NSProcessInfo".as_ptr());
-        if cls.is_null() { return; }
+        if cls.is_null() {
+            return;
+        }
 
         let process_info_sel = sel_registerName(c"processInfo".as_ptr());
         let process_info = send_no_args(cls, process_info_sel);
-        if process_info.is_null() { return; }
+        if process_info.is_null() {
+            return;
+        }
 
         // Create NSString with "SR Player"
         let nsstring_cls = objc_getClass(c"NSString".as_ptr());
