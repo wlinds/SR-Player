@@ -326,35 +326,20 @@ jobs:
 
           **Note:** Windows may show a security warning for unsigned software. Click "More info" → "Run anyway".
 
-          ### What's New in v0.6.0
-
-          **New Features:**
-          - Auto-play next episode when current one finishes
-          - Add share button to copy episode URL to clipboard
-          - Show "Copied to clipboard" status message
+          ### What's New in v0.7.2
 
           **Fixes:**
-          - Fix gapless streaming logic and player state management
-          - Fix volume bug when seeking first time in podcast playback
-          - Fix window icon display in taskbar and title bar (PNG for cross-platform)
-          - Fix NowPlaying text overflow when window is resized
-
-          **Improvements:**
-          - Major refactor: migrate callbacks to callbacks.rs, bundle shared state in app_state.rs
-          - Add improved API caching for schedule, programs, and episodes
-          - Add seek_handler module for cleaner seek logic
-          - Clean up comments throughout codebase
+          - Fix live stream dropping every ~10 seconds due to reqwest total response timeout
+          - Add exponential backoff for stream reconnects with smart reset logic
+          - Check for updates via GitHub Releases API
 
           **Previous Features:**
           - Favorites tab for quick access to your favorite channels and podcasts
-          - Favorite channels and podcasts with star button (persists across app restarts)
-          - Podcast search function to quickly find programs
-          - Favorites stored in ~/.config/sr-player/favorites.json
-          - Multi-channel support with instant channel switching
+          - Podcast search and episode playback with download caching
           - DVR buffer for rewinding live radio streams
-          - Podcast/episode playback with download caching
-          - Enhanced audio engine using Symphonia
-          - Windows MSI installer for easy installation
+          - Multi-channel support with instant channel switching
+          - Gapless audio playback with Symphonia decoder
+          - Cross-platform support (macOS, Linux, Windows) with MSI installer
         files: |
           **/SR-Player-${{ github.ref_name }}-macos.zip
           **/sr-player-${{ github.ref_name }}-linux.tar.gz

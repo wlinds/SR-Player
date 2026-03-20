@@ -266,7 +266,6 @@ impl GaplessPlayer {
                 .pool_max_idle_per_host(5)
                 .pool_idle_timeout(Duration::from_secs(90))
                 .connect_timeout(Duration::from_secs(5))
-                .timeout(Duration::from_secs(10))
                 .tcp_keepalive(Some(Duration::from_secs(30)))
                 .http2_keep_alive_interval(Some(Duration::from_secs(10)))
                 .http2_keep_alive_timeout(Duration::from_secs(20))
@@ -341,13 +340,13 @@ impl GaplessPlayer {
                 return;
             };
 
-            let mut reconnect_count = 0;
+            let mut reconnect_count: u64 = 0;
             loop {
                 if gen_check.load(Ordering::SeqCst) != generation {
                     break;
                 }
 
-                let start_time = Instant::now();
+                let stream_start = Instant::now();
                 match Self::stream_chunks(
                     response,
                     generation,
@@ -358,23 +357,34 @@ impl GaplessPlayer {
                     &live_buffer,
                     &buffer_start_time,
                     &mut bytes_downloaded,
-                    start_time,
+                    stream_start,
                     is_finite,
                 )
                 .await
                 {
                     Ok(()) => break,
                     Err(()) => {
+                        // Only reset reconnect count if stream was stable for 30+ seconds
+                        let stream_duration = stream_start.elapsed();
+                        if stream_duration > Duration::from_secs(30) {
+                            reconnect_count = 0;
+                        }
+
                         reconnect_count += 1;
                         if reconnect_count > 10 {
+                            error!("Too many reconnects, giving up");
                             break;
                         }
-                        if reconnect_count > 1 {
-                            tokio::time::sleep(Duration::from_millis(
-                                200 * (reconnect_count - 1) as u64,
-                            ))
-                            .await;
-                        }
+
+                        // Exponential backoff: 1s, 2s, 4s, 8s, ... capped at 30s
+                        let delay = Duration::from_secs((1 << (reconnect_count - 1)).min(30));
+                        warn!(
+                            "Stream interrupted after {:.1}s, reconnect attempt {} (backoff {}s)",
+                            stream_duration.as_secs_f32(),
+                            reconnect_count,
+                            delay.as_secs()
+                        );
+                        tokio::time::sleep(delay).await;
                         let Some((new_resp, _)) = Self::connect_with_retry(&client, &url).await
                         else {
                             break;
@@ -448,7 +458,6 @@ impl GaplessPlayer {
                         response = buffered_resp;
                         data_tx = fresh_tx;
                         bytes_downloaded = fresh_bytes;
-                        reconnect_count = 0;
                     }
                 }
             }
@@ -538,7 +547,7 @@ impl GaplessPlayer {
                 return Ok(());
             }
 
-            match tokio::time::timeout(Duration::from_secs(10), response.chunk()).await {
+            match tokio::time::timeout(Duration::from_secs(30), response.chunk()).await {
                 Ok(Ok(Some(chunk))) => {
                     *bytes_downloaded += chunk.len();
                     if let Ok(mut s) = stats.try_lock() {
